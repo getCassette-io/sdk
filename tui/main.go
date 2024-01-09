@@ -74,7 +74,7 @@ type model struct {
 	webInput                            string
 	loading                             bool
 	inputChan                           chan string
-	list                                list.Model // list of initial options
+	mainMenuList                        list.Model // mainMenuList of initial options
 	choice                              string
 	confirmState                        bool
 	actionToConfirm                     func() sessionState // This will hold the action to be confirmed
@@ -134,7 +134,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tea.WindowSizeMsg:
 		h, v := docStyle.GetFrameSize()
-		m.list.SetSize(msg.Width-h, msg.Height-v)
+		m.mainMenuList.SetSize(msg.Width-h, msg.Height-v)
 	}
 	// Process state-specific interactions
 	switch m.state {
@@ -169,7 +169,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			// No progress update, proceed with other messages
 		}
-		//m.list, cmd = m.progressBar.Update(msg)
+		//m.mainMenuList, cmd = m.progressBar.Update(msg)
 		//cmds = append(cmds, cmd)
 	case walletView:
 		logger.Println("setting to wallet view")
@@ -178,9 +178,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
 			if msg.String() == "enter" {
-				fmt.Println("contianer list view", m.list.SelectedItem())
-				// Handle selection in the list view
-				i, ok := m.list.SelectedItem().(item)
+				fmt.Println("contianer mainMenuList view", m.mainMenuList.SelectedItem())
+				// Handle selection in the mainMenuList view
+				i, ok := m.mainMenuList.SelectedItem().(item)
 				if ok {
 					fmt.Println("entry selected is ", i.Title(), i.contentID)
 					if i.contentID == "walletItems" {
@@ -211,7 +211,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							GateAccount: &gateKey,
 							Pl:          m.controller.Pl,
 							//ReadWriter:       nil,
-							ContainerEmitter: emitter.MockObjectEvent{},
+							ContainerEmitter: emitter.MockObjectEvent{}, //this should update the containerList when new containers appear
 							//Attrs:            nil,
 							Verb: session.VerbContainerPut,
 							Id:   "87JeshQhXKBw36nULzpLpyn34Mhv1kGCccYyHU2BqGpT",
@@ -219,9 +219,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							//ExpiryEpoch:      0,
 						}
 
-						//if err := m.controller.PerformContainerAction(wg, ctx, cancelCtx, p, mockAction.List); err != nil {
-						//	return nil, nil
-						//}
 						fmt.Println("perform container action")
 						if err := m.controller.PerformContainerAction(wg, ctx, cancelCtx, p, mockAction.List); err != nil {
 							//p.Send(actionCompletedMsg{err})
@@ -256,16 +253,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		m.list, cmd = m.list.Update(msg)
+		m.mainMenuList, cmd = m.mainMenuList.Update(msg)
 		cmds = append(cmds, cmd)
 	case containerListView:
 		fmt.Println("here we are")
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
 			if msg.String() == "enter" {
-				fmt.Println("contianer list view", m.list.SelectedItem())
-				// Handle selection in the list view
-				i, ok := m.list.SelectedItem().(item)
+				// Handle selection in the mainMenuList view
+				i, ok := m.mainMenuList.SelectedItem().(item)
 				if ok {
 					if i.contentID == "walletItems" {
 						m.walletCard = populateWalletCard(m.controller.Account()) // prepare data for card
@@ -315,32 +311,35 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							//p.Send(actionCompletedMsg{nil})
 							//return objectListView
 						}
-						//in reality we want this to populate asynchronously.
+
+						r := m.containerListTable.SelectedRow()
+						containerID := r[0]
+						listContainerContent := views.SimulateNeoFS(views.List, containerID) //search by container ID (
+						logger.Println("Enter pressed in objectListView - ", listContainerContent)
+
 						var rows []table.Row
-						var containerHeadings = []table.Column{
+						var objectHeadings = []table.Column{
 							{Title: "ID", Width: 10},
-							{Title: "Container Name", Width: 10},
-							//{Title: "Hash", Width: 10},
+							{Title: "Name", Width: 10},
+							{Title: "Hash", Width: 10},
 							{Title: "Size", Width: 10},
 						}
-						//rows = append(rows, table.Row{
-						//	"fakeID", "fakeName", "100",
-						//})
-						retrieveContainers := views.SimulateNeoFS(views.Containers, i.contentID) // Get the content based on the selected item
-
-						for _, v := range retrieveContainers {
+						for _, v := range listContainerContent {
 							rows = append(rows, table.Row{
-								v.ID, v.Name, fmt.Sprintf("%.1f", v.Size),
+								v.ID, v.Name, v.Hash, fmt.Sprintf("%.1f", v.Size),
 							})
 						}
-						m.containerListTable.SetColumns(containerHeadings)
-						m.containerListTable.SetRows(rows)
-						m.state = objectListView // Transition to containerListTable view
+						m.objectListTable.SetColumns(objectHeadings)
+						m.objectListTable.SetRows(rows)
+						m.state = objectListView
+						/*						m.objectListTable, cmd = m.objectListTable.Update(msg)
+												cmds = append(cmds, cmd)
+						*/
 					}
 				}
 			}
 		}
-		m.list, cmd = m.list.Update(msg)
+		m.containerListTable, cmd = m.containerListTable.Update(msg)
 		cmds = append(cmds, cmd)
 	case objectView:
 		switch msg := msg.(type) {
@@ -348,9 +347,41 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Handle containerListTable interactions
 			if msg.Type == tea.KeyEnter {
 				// Handle selection in the containerListTable view
+				//r := m.objectListTable.SelectedRow()
+				//objectID := r[0]
+				m.state = objectCardView
+			} else if msg.Type == tea.KeyCtrlD {
+			}
+		}
+		m.objectListTable, cmd = m.objectListTable.Update(msg)
+		cmds = append(cmds, cmd)
+	case confirmationView:
+		// Handle the confirmation prompt logic here
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			fmt.Println("mesg ", msg.String())
+			switch msg.String() {
+			case "y", "Y":
+				m.confirmState = true
+				m.state = m.actionToConfirm() // Perform the confirmed action
+			case "n", "N":
+				m.confirmState = false
+				m.state = objectView
+			}
+		}
+	case objectListView:
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			// Handle containerListTable interactions
+			if msg.Type == tea.KeyEnter {
+				// Handle selection in the containerListTable view
 				r := m.objectListTable.SelectedRow()
-				objectID := r[0]
-
+				fmt.Println("r ", r)
+				objectParentID := r[0]
+				objectID := r[1]
+				objectName := r[2]
+				objectHash := r[3]
+				//objectSize := r[4]
 				m.actionToConfirm = func() sessionState {
 					//operation context
 					wg := waitgroup.NewWaitGroup(logger)
@@ -402,7 +433,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					} else {
 						fmt.Println("finished performing action")
 						//p.Send(actionCompletedMsg{nil})
-						return objectView
+						//size, _ := strconv.Atoi(objectSize)
+						el := views.Element{
+							ParentID: objectParentID,
+							ID:       objectID,
+							Name:     objectName,
+							Hash:     objectHash,
+							//Size:     float32(size),
+						}
+						m.cardData = populateElementCard(el)
+						return objectCardView
 					}
 					logger.Println("left groups: ", wg.Groups())
 					return progressState
@@ -410,52 +450,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = confirmationView
 				//m.state = detailedTableView // Transition to detailed containerListTable view
 			} else if msg.Type == tea.KeyCtrlD {
-			}
-		}
-		m.objectListTable, cmd = m.objectListTable.Update(msg)
-		cmds = append(cmds, cmd)
-	case confirmationView:
-		// Handle the confirmation prompt logic here
-		switch msg := msg.(type) {
-		case tea.KeyMsg:
-			fmt.Println("mesg ", msg.String())
-			switch msg.String() {
-			case "y", "Y":
-				m.confirmState = true
-				m.state = m.actionToConfirm() // Perform the confirmed action
-			case "n", "N":
-				m.confirmState = false
-				m.state = objectView
-			}
-		}
-	case objectListView:
-		switch msg := msg.(type) {
-		case tea.KeyMsg:
-			// Handle containerListTable interactions
-			if msg.Type == tea.KeyEnter {
-				// Handle selection in the containerListTable view
-				r := m.containerListTable.SelectedRow()
-				containerID := r[0]
-				listContainerContent := views.SimulateNeoFS(views.List, containerID) //search by container ID (
-				logger.Println("Enter pressed in objectListView - ", listContainerContent)
-
-				var rows []table.Row
-				var objectHeadings = []table.Column{
-					{Title: "ID", Width: 10},
-					{Title: "Name", Width: 10},
-					{Title: "Hash", Width: 10},
-					{Title: "Size", Width: 10},
-				}
-				for _, v := range listContainerContent {
-					rows = append(rows, table.Row{
-						v.ID, v.Name, v.Hash, fmt.Sprintf("%.1f", v.Size),
-					})
-				}
-				m.objectListTable.SetColumns(objectHeadings)
-				m.objectListTable.SetRows(rows)
-				m.state = objectView
-				m.objectListTable, cmd = m.objectListTable.Update(msg)
-				cmds = append(cmds, cmd)
 			}
 		}
 		// Update containerListTable interactions only when in objectListView
@@ -487,10 +481,10 @@ func (m model) View() string {
 		return m.progressBar.View()
 
 	case mainMenuView:
-		return baseStyle.Render(m.list.View())
+		return baseStyle.Render(m.mainMenuList.View())
 		//return fmt.Sprintf("downloading state: %d\n", m.progressBar.Value())
 	case containerListView:
-		// When in list view, render the list
+		// When in mainMenuList view, render the mainMenuList
 		return baseStyle.Render(m.containerListTable.View())
 	case objectListView:
 		return baseStyle.Render(m.objectListTable.View())
@@ -507,8 +501,8 @@ func (m model) View() string {
 		}
 		return baseStyle.Render(prompt.View()) // return the card view
 	default:
-		// As a fallback, render the list (or a welcome message or similar)
-		return baseStyle.Render("Please select an option from the list:\n\n" + m.list.View())
+		// As a fallback, render the mainMenuList (or a welcome message or similar)
+		return baseStyle.Render("Please select an option from the mainMenuList:\n\n" + m.mainMenuList.View())
 	}
 }
 
@@ -573,7 +567,7 @@ func main() {
 		//inputChan:          make(chan string),
 		containerListTable: t,
 		objectListTable:    ot,
-		list:               l,
+		mainMenuList:       l,
 	}
 
 	fmt.Println("pool retrieved. Continuing")
@@ -586,7 +580,7 @@ func main() {
 	}()
 	//override the progress bar from the default controller
 	//c.ProgressHandlerManager.Emitter = m.progressBar
-	m.list.Title = "Options"
+	m.mainMenuList.Title = "Options"
 	// Start Bubble Tea
 	p = tea.NewProgram(m)
 	if _, err := p.Run(); err != nil {

@@ -70,7 +70,7 @@ func (o *MockContainer) List(wg *waitgroup.WG, ctx context.Context, p ContainerP
 							notification.ActionNotification)
 						return
 					}
-					time.Sleep(5 * time.Millisecond)
+					time.Sleep(100 * time.Millisecond)
 				}
 				exit = true
 				break

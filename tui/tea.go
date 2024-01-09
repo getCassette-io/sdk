@@ -92,7 +92,7 @@ func DisplayColumns(t *table.Model, columns []table.Column, rows []table.Row) {
 //}
 
 var options = []list.Item{
-	item{title: "list containers", contentID: "containers"},
+	item{title: "view containers", contentID: "containers"},
 	item{title: "view wallet information", contentID: "walletItems"},
 	item{title: "view notifications", contentID: "notifications"},
 	item{title: "view contacts", contentID: "contacts"},

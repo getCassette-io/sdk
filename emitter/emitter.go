@@ -12,13 +12,15 @@ import (
 type EventMessage string
 
 const (
-	RequestSign         EventMessage = "request_sign_payload"
-	ContainerListUpdate              = "container_list_update"
-	ObjectAddUpdate                  = "objectAddUpdate"
-	ObjectRemoveUpdate               = "objectRemoveUpdate"
-	ObjectFailed                     = "objectFailed"
-	NotificationMessage              = "notification_message"
-	ProgressMessage                  = "progress_message"
+	RequestSign           EventMessage = "request_sign_payload"
+	ContainerListUpdate                = "container_list_update"
+	ContainerAddUpdate                 = "container_add_update"
+	ContainerRemoveUpdate              = "container_remove_update"
+	ObjectAddUpdate                    = "object_add_update"
+	ObjectRemoveUpdate                 = "object_remove_update"
+	ObjectFailed                       = "object_failed"
+	NotificationMessage                = "notification_message"
+	ProgressMessage                    = "progress_message"
 )
 
 type Emitter interface {
@@ -32,6 +34,7 @@ func (e MockObjectEvent) Emit(c context.Context, message string, payload any) er
 	return nil
 }
 
+// fixme - this should not be part of SDK (i.e wails should not be here)
 type Event struct{}
 
 func (e Event) Emit(c context.Context, message string, payload any) error {
@@ -83,6 +86,5 @@ func (m MockRawWalletEmitter) Emit(c context.Context, message string, p any) err
 }
 
 func (m MockRawWalletEmitter) GenerateIdentifier() string {
-	//newUUID, _ := uuid.NewUUID()
 	return "mock-signer-94d9a4c7-9999-4055-a549-f51383edfe57"
 }

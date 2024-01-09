@@ -1,16 +1,16 @@
+#project
+.idea/
 .DS_Store
 **/.DS_Store
 
+#serets
 !wallets/
 wallets/*
 !wallets/.placeholder
-node_modules/
-frontend/build
-!frontend/src/dbg_data_structures/
-frontend/src/dbg_data_structures/*
-!frontend/src/dbg_data_structures/.placeholder
-.idea/
+
+#binaries
 out/*
 
+#logs
 **/debug.log
 
