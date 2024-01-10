@@ -194,7 +194,7 @@ func (o *MockObject) Read(wg *waitgroup.WG, ctx context.Context, p payload.Param
 	}()
 	return nil
 }
-func (o *MockObject) Write(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) (notification.Notification, error) {
+func (o *MockObject) Write(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) (notification.NewNotification, error) {
 	buffer := make([]byte, 10)
 	wgMessage := "mock_write_" + utils.GetCurrentFunctionName()
 	wg.Add(1, wgMessage)
@@ -241,17 +241,17 @@ func (o *MockObject) Write(wg *waitgroup.WG, ctx context.Context, p payload.Para
 			}
 		}
 	}()
-	return notification.Notification{}, nil
+	return notification.NewNotification{}, nil
 }
-func (o *MockObject) Delete(p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) (notification.Notification, error) {
-	return notification.Notification{}, nil
+func (o *MockObject) Delete(p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) (notification.NewNotification, error) {
+	return notification.NewNotification{}, nil
 }
-func (o *MockObject) List(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) (notification.Notification, error) {
+func (o *MockObject) List(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) (notification.NewNotification, error) {
 	wgMessage := "mock_list_" + utils.GetCurrentFunctionName()
 
 	params, ok := p.(*ObjectParameter)
 	if !ok {
-		return notification.Notification{}, errors.New("no object parameters")
+		return notification.NewNotification{}, errors.New("no object parameters")
 	}
 	wg.Add(1, wgMessage)
 	go func() {
@@ -280,5 +280,5 @@ func (o *MockObject) List(wg *waitgroup.WG, ctx context.Context, p payload.Param
 			}
 		}
 	}()
-	return notification.Notification{}, nil
+	return notification.NewNotification{}, nil
 }

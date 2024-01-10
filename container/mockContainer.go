@@ -39,8 +39,8 @@ func (o *MockContainer) Read(wg *waitgroup.WG, ctx context.Context, p ContainerP
 	return nil
 }
 
-func (o *MockContainer) Delete(p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) (notification.Notification, error) {
-	return notification.Notification{}, nil
+func (o *MockContainer) Delete(p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) (notification.NewNotification, error) {
+	return notification.NewNotification{}, nil
 }
 func (o *MockContainer) List(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error {
 	// todo: list all containers

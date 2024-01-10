@@ -28,7 +28,7 @@ import (
 	"time"
 )
 
-// type ObjectActionType func(p payload.Parameters, signedPayload payload.Payload, token Token) (notification.Notification, error)
+// type ObjectActionType func(p payload.Parameters, signedPayload payload.Payload, token Token) (notification.NewNotification, error)
 type ObjectActionType func(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error
 type ContainerActionType func(wg *waitgroup.WG, ctx context.Context, p container.ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error
 
