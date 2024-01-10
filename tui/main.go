@@ -171,6 +171,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		//m.mainMenuList, cmd = m.progressBar.Update(msg)
 		//cmds = append(cmds, cmd)
+
+		return m, cmd
 	case walletView:
 		logger.Println("setting to wallet view")
 		m.walletCard = populateWalletCard(m.controller.Account()) // prepare data for card
@@ -442,6 +444,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							//Size:     float32(size),
 						}
 						m.cardData = populateElementCard(el)
+						updatedCard, cmd := m.cardData.Update(msg) // Obtain the updated card and command
+						m.cardData = updatedCard.(card)            // Cast updatedCard to card type
+						cmds = append(cmds, cmd)
 						return objectCardView
 					}
 					logger.Println("left groups: ", wg.Groups())
