@@ -7,7 +7,7 @@ import (
 )
 
 func TestNotification(t *testing.T) {
-	m := MockNotifier{
+	m := NotificationManager{
 		notificationCh: make(chan NewNotification),
 		ctx:            context.Background(),
 	}

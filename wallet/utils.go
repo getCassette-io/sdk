@@ -6,9 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"github.com/nspcc-dev/neo-go/pkg/core/native/nativenames"
 	"github.com/nspcc-dev/neo-go/pkg/encoding/base58"
-	client "github.com/nspcc-dev/neo-go/pkg/rpcclient"
 	"github.com/nspcc-dev/neo-go/pkg/util"
 	"math/big"
 )
@@ -17,7 +15,8 @@ const (
 	// NEO2Prefix is the first byte of address for NEO2.
 	NEO2Prefix byte = 0x17
 	// NEO3Prefix is the first byte of address for NEO3.
-	NEO3Prefix byte = 0x35
+	NEO3Prefix         byte   = 0x35
+	NEO_FS_GAS_BALANCE string = "NEO_FS_GAS_BALANCE"
 )
 
 // Prefix is the byte used to prepend to addresses when encoding them, it can
@@ -40,10 +39,11 @@ func PrettyPrint(data interface{}) (string, error) {
 	return string(val), nil
 }
 
-func GasToken(cli client.Client) (util.Uint160, error) {
-	gasToken, err := cli.GetNativeContractHash(nativenames.Gas)
-	return gasToken, err
-}
+//func GasToken(cli client.Client) (util.Uint160, error) {
+//	cli.
+//	gasToken, err := cli.GetNativeContractHash(nativenames.Gas)
+//	return gasToken, err
+//}
 
 //converting addresses
 //https://github.com/nspcc-dev/neo-go/blob/613a23cc3f6c303882a81b61f3baec39b7e84597/pkg/encoding/address/address.go

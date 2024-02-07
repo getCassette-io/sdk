@@ -3,13 +3,17 @@ package object
 import (
 	"context"
 	"crypto/ecdsa"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/configwizard/sdk/database"
 	"github.com/configwizard/sdk/emitter"
 	"github.com/configwizard/sdk/notification"
 	"github.com/configwizard/sdk/payload"
+	"github.com/configwizard/sdk/readwriter"
 	"github.com/configwizard/sdk/tokens"
+	"github.com/configwizard/sdk/utils"
+	"github.com/configwizard/sdk/waitgroup"
 	"github.com/nspcc-dev/neo-go/pkg/wallet"
 	"github.com/nspcc-dev/neofs-sdk-go/client"
 	apistatus "github.com/nspcc-dev/neofs-sdk-go/client/status"
@@ -22,8 +26,15 @@ import (
 	"github.com/nspcc-dev/neofs-sdk-go/user"
 	"io"
 	"log"
-	"sync"
+	"path/filepath"
+	"reflect"
+	"strconv"
+	"strings"
+	"time"
 )
+
+const payloadChecksumHeader = "payload_checksum"
+const payloadFileType = "filetype"
 
 // isErrAccessDenied is a helpher function for errors from NeoFS
 func isErrAccessDenied(err error) (string, bool) {
@@ -44,14 +55,15 @@ func isErrAccessDenied(err error) (string, bool) {
 
 // todo: do we need an interface now if container's handle themselves?
 type ObjectParameter struct {
-	ContainerId string
-	Id          string
-	Description string
-	PublicKey   ecdsa.PublicKey
-	GateAccount *wallet.Account
-	Pl          *pool.Pool
-	io.ReadWriter
-	ctx context.Context
+	ContainerId   string
+	Id            string
+	Description   string
+	PublicKey     ecdsa.PublicKey
+	GateAccount   *wallet.Account
+	Pl            *pool.Pool
+	io.ReadWriter //for reading/writing files
+	WriteCloser   io.WriteCloser
+	//ctx context.Context
 
 	//objectEmitter is used for sending an update of the state of the object's action, e.g send a message that an object has been downloaded.
 	//the emitter will be responsible for keeping the UI update on changes. It is not responsible for uniqueness etc
@@ -94,7 +106,7 @@ func (o ObjectParameter) ForUser() (*wallet.Account, error) {
 	return nil, errors.New("no gate wallet for object")
 }
 
-type Object struct {
+type ObjectCaller struct {
 	notification.Notifier
 	database.Store
 	//PublicKey     ecdsa.PublicKey
@@ -110,7 +122,7 @@ type Object struct {
 // we should return that with an 'synchronising' message. then the routine can update the UI for this request using an emitter
 // and a message type with any new information?
 // however maybe that isn;t the jjob of this and its the hob of the controller, who interfces with the UI. so this needs a chanenl to send messages on actually
-func (o *Object) Head(wg *sync.WaitGroup, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error {
+func (o *ObjectCaller) Head(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error {
 	var objID oid.ID
 	if err := objID.DecodeString(p.ID()); err != nil {
 		fmt.Println("wrong object Id", err)
@@ -126,19 +138,21 @@ func (o *Object) Head(wg *sync.WaitGroup, p payload.Parameters, actionChan chan 
 		return err
 	}
 	var prmHead client.PrmObjectHead
+	fmt.Println("token provided to head ", token, token.(*tokens.BearerToken))
 	if tok, ok := token.(*tokens.BearerToken); ok {
 		//todo - this could be nil and cause an issue:
 		prmHead.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
 	} else {
-		return errors.New("no bearer token provided")
+		return errors.New("no bearer token provided") //in the future we could offer a session token, but not really recommended.
 	}
-	params, ok := p.(*ObjectParameter)
+	fmt.Println("p ---- ", p, p.(ObjectParameter))
+	params, ok := p.(ObjectParameter)
 	if !ok {
 		return errors.New("no object parameters")
 	}
 	//todo this should be on a routine and send updates to the actionChan. Synchronised currently. (slow)
 	gateSigner := user.NewAutoIDSignerRFC6979(gA.PrivateKey().PrivateKey)
-	hdr, err := p.Pool().ObjectHead(params.ctx, cnrID, objID, gateSigner, prmHead)
+	hdr, err := p.Pool().ObjectHead(ctx, cnrID, objID, gateSigner, prmHead)
 	if err != nil {
 		if reason, ok := isErrAccessDenied(err); ok {
 			fmt.Printf("error here: %s: %s\r\n", err, reason)
@@ -147,10 +161,45 @@ func (o *Object) Head(wg *sync.WaitGroup, p payload.Parameters, actionChan chan 
 		fmt.Printf("read object header via connection pool: %s", err)
 		return err
 	}
+	id, ok := hdr.ID()
+	if !ok {
+		return errors.New(utils.ErrorNoID)
+	}
+	localObject := Object{
+		ParentID:   cnrID.String(),
+		Id:         id.String(),
+		Attributes: make(map[string]string),
+		Size:       hdr.PayloadSize(),
+		CreatedAt:  time.Time{},
+	}
+	for _, a := range hdr.Attributes() {
+		localObject.Attributes[a.Key()] = a.Value()
+	}
+	checksum, _ := hdr.PayloadChecksum()
+	localObject.Attributes[payloadChecksumHeader] = checksum.String()
+	if filename, ok := localObject.Attributes[object.AttributeFileName]; ok {
+		localObject.Name = filename
+		localObject.Attributes[payloadFileType] = strings.TrimPrefix(filepath.Ext(filename), ".")
+	} else {
+		localObject.Attributes[payloadFileType] = "" //delete this an check undefined on attributes frontend?, localObject.Attributes) // = "" //breaking changer from "X_EXT"
+	}
+	if timestamp, ok := localObject.Attributes[object.AttributeTimestamp]; ok {
+		//strconv.FormatInt(time.Now().Unix(), 10)
+		i, err := strconv.ParseInt(timestamp, 10, 64)
+		if err != nil {
+			panic(err)
+		}
+		tm := time.UnixMilli(i)
+		localObject.CreatedAt = tm //might want to keep this as unix and display on frontend
+	}
+	if contentType, ok := localObject.Attributes[object.AttributeContentType]; ok {
+		localObject.ContentType = contentType
+	}
+	fmt.Printf("received header object from pool %s -- %+v\r\n", reflect.TypeOf(hdr).String(), localObject)
 	//sends this wherever it needs to go. If this is needed somewhere else in the app, then a closure can allow this to be accessed elsewhere in a routine.
-	return params.ObjectEmitter.Emit(params.ctx, emitter.ObjectAddUpdate, hdr)
+	return params.ObjectEmitter.Emit(ctx, emitter.ObjectAddUpdate, localObject)
 }
-func (o *Object) Delete(wg *sync.WaitGroup, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error {
+func (o *ObjectCaller) Delete(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error {
 	var objID oid.ID
 	if err := objID.DecodeString(p.ID()); err != nil {
 		fmt.Println("wrong object Id", err)
@@ -177,14 +226,14 @@ func (o *Object) Delete(wg *sync.WaitGroup, p payload.Parameters, actionChan cha
 		return errors.New("no bearer token provided")
 	}
 	gateSigner := user.NewAutoIDSignerRFC6979(gA.PrivateKey().PrivateKey)
-	if id, err := p.Pool().ObjectDelete(params.ctx, cnrID, objID, gateSigner, prmDelete); err != nil {
+	if id, err := p.Pool().ObjectDelete(ctx, cnrID, objID, gateSigner, prmDelete); err != nil {
 		return err
 	} else {
-		return params.ObjectEmitter.Emit(params.ctx, emitter.ObjectRemoveUpdate, id)
+		return params.ObjectEmitter.Emit(ctx, emitter.ObjectRemoveUpdate, id)
 	}
 }
 
-func (o *Object) List(wg *sync.WaitGroup, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error {
+func (o *ObjectCaller) List(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error {
 	var cnrID cid.ID
 	if err := cnrID.DecodeString(p.ParentID()); err != nil {
 		fmt.Println("wrong container Id", err)
@@ -193,10 +242,6 @@ func (o *Object) List(wg *sync.WaitGroup, p payload.Parameters, actionChan chan 
 	gA, err := p.ForUser()
 	if err != nil {
 		return err
-	}
-	params, ok := p.(*ObjectParameter)
-	if !ok {
-		return errors.New("no object parameters")
 	}
 	prmList := client.PrmObjectSearch{}
 	if tok, ok := token.(*tokens.BearerToken); ok {
@@ -209,13 +254,13 @@ func (o *Object) List(wg *sync.WaitGroup, p payload.Parameters, actionChan chan 
 	filter.AddRootFilter()
 	prmList.SetFilters(filter)
 	gateSigner := user.NewAutoIDSignerRFC6979(gA.PrivateKey().PrivateKey)
-	init, err := p.Pool().ObjectSearchInit(params.ctx, cnrID, gateSigner, prmList)
+	init, err := p.Pool().ObjectSearchInit(ctx, cnrID, gateSigner, prmList)
 	if err != nil {
 		return err
 	}
 	var iterationError error
 	if err = init.Iterate(func(id oid.ID) bool {
-		if metaError := o.Head(wg, p, actionChan, token); metaError != nil {
+		if metaError := o.Head(wg, ctx, p, actionChan, token); metaError != nil {
 			iterationError = metaError
 			return true
 		}
@@ -228,7 +273,7 @@ func (o *Object) List(wg *sync.WaitGroup, p payload.Parameters, actionChan chan 
 }
 
 // tmpPreRequisite should be run before trying to retrieve an object. It provides the size of the object and the reader that will do the retrieval.
-func InitReader(params ObjectParameter, token tokens.Token) (object.Object, io.ReadCloser, error) {
+func InitReader(ctx context.Context, params ObjectParameter, token tokens.Token) (object.Object, io.ReadCloser, error) {
 	var objID oid.ID
 	if err := objID.DecodeString(params.ID()); err != nil {
 		fmt.Println("wrong object Id", err)
@@ -252,7 +297,7 @@ func InitReader(params ObjectParameter, token tokens.Token) (object.Object, io.R
 		return object.Object{}, nil, errors.New("no bearer token provided")
 	}
 
-	dstObject, objReader, err := params.Pool().ObjectGetInit(params.ctx, cnrID, objID, gateSigner, getInit)
+	dstObject, objReader, err := params.Pool().ObjectGetInit(ctx, cnrID, objID, gateSigner, getInit)
 	if err != nil {
 		log.Println("error creating object reader ", err)
 		return object.Object{}, nil, err
@@ -264,7 +309,7 @@ func InitReader(params ObjectParameter, token tokens.Token) (object.Object, io.R
 	return dstObject, objReader, nil
 }
 
-func (o Object) Read(wg *sync.WaitGroup, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error {
+func (o ObjectCaller) Read(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error {
 	buf := make([]byte, 1024)
 	for {
 		n, err := p.Read(buf)
@@ -305,26 +350,25 @@ func CloseReader(objReader io.ReadCloser) error {
 	return objReader.Close()
 }
 
-func InitWriter(p ObjectParameter, token tokens.Token) (io.WriteCloser, error) {
+func InitWriter(ctx context.Context, p *ObjectParameter, token tokens.Token) (io.WriteCloser, error) {
 	var cnrID cid.ID
 	if err := cnrID.DecodeString(p.ParentID()); err != nil {
 		fmt.Println("wrong container Id", err)
 		return nil, err
 	}
+	fmt.Println("init writing for container ID ", cnrID.String())
 	gA, err := p.ForUser()
 	if err != nil {
 		return nil, err
 	}
 
-	var prmInit client.PrmInit
-	c, err := client.New(prmInit)
+	sdkCli, err := p.Pool().RawClient()
 	if err != nil {
 		return nil, err
 	}
 	userID := user.ResolveFromECDSAPublicKey(p.PublicKey)
 	var gateSigner user.Signer = user.NewAutoIDSignerRFC6979(gA.PrivateKey().PrivateKey)
-
-	ni, err := c.NetworkInfo(p.ctx, client.PrmNetworkInfo{})
+	ni, err := sdkCli.NetworkInfo(ctx, client.PrmNetworkInfo{})
 	if err != nil {
 		return nil, fmt.Errorf("network info: %w", err)
 	}
@@ -333,6 +377,10 @@ func InitWriter(p ObjectParameter, token tokens.Token) (io.WriteCloser, error) {
 	opts.SetCurrentNeoFSEpoch(ni.CurrentEpoch())
 	if tok, ok := token.(*tokens.BearerToken); ok {
 		//todo - this could be nil and cause an issue:
+		if !tok.BearerToken.VerifySignature() {
+			fmt.Println("ERROR Signature not verified!!!")
+			return nil, errors.New("TOKEN IS NOT VERIFIED!!!!")
+		}
 		opts.SetBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
 	} else {
 		return nil, errors.New("no bearer token provided")
@@ -345,12 +393,31 @@ func InitWriter(p ObjectParameter, token tokens.Token) (io.WriteCloser, error) {
 	hdr.SetType(object.TypeRegular)
 	hdr.SetOwnerID(&userID)
 	hdr.SetCreationEpoch(ni.CurrentEpoch())
-	//todo: readers and writers should be attached to the object that owns the method
-	plWriter, err := slicer.InitPut(p.ctx, c, hdr, gateSigner, opts)
+	plWriter, err := slicer.InitPut(ctx, sdkCli, hdr, gateSigner, opts)
+	if err != nil {
+		fmt.Println("error creating putter ", err)
+		return nil, err
+	}
+	//p.Id = plWriter.ID().String() //store this back on the object so we can access it later.
+	p.WriteCloser = plWriter
 	return plWriter, err
 }
 
-func (o Object) Write(wg *sync.WaitGroup, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error {
+func (o ObjectCaller) Write(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error {
+	objectParameters, ok := p.(ObjectParameter)
+	if ok {
+		var err error
+		objectWriteCloser, err := InitWriter(ctx, &objectParameters, token)
+		if err != nil {
+			return err
+		}
+		if ds, ok := objectParameters.ReadWriter.(*readwriter.DualStream); ok {
+			ds.Writer = objectWriteCloser
+		} else {
+			return err
+		}
+	}
+
 	buf := make([]byte, 1024)
 	for {
 		n, err := p.Read(buf)
@@ -366,7 +433,7 @@ func (o Object) Write(wg *sync.WaitGroup, p payload.Parameters, actionChan chan 
 		}
 		if err != nil {
 			if err == io.EOF {
-				fmt.Println("reached end of file")
+
 				break
 			}
 			fmt.Println("actual error ", err)
@@ -378,6 +445,41 @@ func (o Object) Write(wg *sync.WaitGroup, p payload.Parameters, actionChan chan 
 			return err
 		}
 	}
+	if tok, ok := token.(*tokens.BearerToken); ok {
+		//todo - this could be nil and cause an issue:
+		if !tok.BearerToken.VerifySignature() {
+			fmt.Println("ERROR Signature not verified!!!")
+			return errors.New("TOKEN IS NOT VERIFIED!!!!")
+		} else {
+			j, _ := json.MarshalIndent(tok.BearerToken, "", " ")
+			fmt.Printf("verified %s\n", j)
+			fmt.Printf("table %+v\r\n", tok.BearerToken.EACLTable())
+		}
+	}
+	if err := objectParameters.WriteCloser.Close(); err != nil {
+		var errAccess apistatus.ObjectAccessDenied
+		if errors.Is(err, &errAccess) {
+			fmt.Println("access reason:", errAccess.Error())
+		}
+		fmt.Println("error closing writeCloser ", err)
+		return err
+	}
+	if payloadWriter, ok := objectParameters.WriteCloser.(*slicer.PayloadWriter); ok {
+		objectParameters.Id = payloadWriter.ID().String()
+		fmt.Println("pushing data for container ", p.ParentID())
+		fmt.Println("reached end of file, ", objectParameters.Id)
+	}
+	fmt.Println("reached end of file, ", p.ID())
+	actionChan <- o.Notification(
+		"upload complete!",
+		"object "+p.ID()+" completed", //we gleaned the ID during the write initiator.
+		notification.Success,
+		notification.ActionNotification)
+	//if oParameter, ok := p.(ObjectParameter); ok {
+	//
+	//} else {
+	//	return errors.New("could not retrieve ID of object")
+	//}
 	return nil
 }
 
@@ -393,3 +495,13 @@ func (o Object) Write(wg *sync.WaitGroup, p payload.Parameters, actionChan chan 
 //	//return o.Head(wg, p, actionChan, token)
 //	return o.PayloadWriter.ID(), nil
 //}
+
+type Object struct {
+	ParentID    string            `json:"parentID"`
+	Name        string            `json:"name"`
+	Id          string            `json:"id"`
+	ContentType string            `json:"contentType"`
+	Attributes  map[string]string `json:"attributes"`
+	Size        uint64            `json:"size"`
+	CreatedAt   time.Time         `json:"CreatedAt"`
+}

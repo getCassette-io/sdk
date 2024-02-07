@@ -2,6 +2,8 @@ package controller
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -12,18 +14,24 @@ import (
 	"github.com/configwizard/sdk/object"
 	"github.com/configwizard/sdk/payload"
 	gspool "github.com/configwizard/sdk/pool"
+	"github.com/configwizard/sdk/readwriter"
 	"github.com/configwizard/sdk/tokens"
 	"github.com/configwizard/sdk/utils"
 	"github.com/configwizard/sdk/waitgroup"
+	"github.com/configwizard/sdk/wallet"
 	"github.com/google/uuid"
 	"github.com/nspcc-dev/neo-go/pkg/crypto/keys"
+	"github.com/nspcc-dev/neo-go/pkg/util"
 	wal "github.com/nspcc-dev/neo-go/pkg/wallet"
+	"github.com/nspcc-dev/neofs-sdk-go/client"
 	cid "github.com/nspcc-dev/neofs-sdk-go/container/id"
 	neofsecdsa "github.com/nspcc-dev/neofs-sdk-go/crypto/ecdsa"
 	"github.com/nspcc-dev/neofs-sdk-go/eacl"
 	"github.com/nspcc-dev/neofs-sdk-go/pool"
 	"github.com/nspcc-dev/neofs-sdk-go/session"
+	"github.com/nspcc-dev/neofs-sdk-go/user"
 	"log"
+	"reflect"
 	"sync"
 	"time"
 )
@@ -119,7 +127,7 @@ func (w RawAccount) Sign(p payload.Payload) error {
 	}
 	p.Signature.HexSignature = hex.EncodeToString(signed)
 	//p.OutgoingData = signed //fixme: total hack. This is not how this field should be used
-	return w.emitter.Emit(context.Background(), (string)(emitter.RequestSign), p)
+	return w.emitter.Emit(context.Background(), emitter.RequestSign, p)
 }
 
 func (w RawAccount) PublicKeyHexString() string {
@@ -132,9 +140,11 @@ func (w RawAccount) Address() string {
 }
 
 type WCWallet struct {
-	WalletAddress string
-	PublicKey     string
-	emitter       emitter.Emitter
+	Ctx           context.Context `json:"-"`
+	WalletAddress string          `json:"walletAddress"`
+	PublicKey     string          `json:"publicKey"`
+	Network       string          `json:"network"`
+	emitter       emitter.Emitter `json:"-"`
 }
 
 func (w *WCWallet) SetEmitter(em emitter.Emitter) {
@@ -144,7 +154,12 @@ func (w WCWallet) Address() string {
 	return w.WalletAddress
 }
 func (w WCWallet) Sign(p payload.Payload) error {
-	return w.emitter.Emit(context.Background(), (string)(emitter.RequestSign), p)
+	sEnc := base64.StdEncoding.EncodeToString(p.OutgoingData)
+
+	fmt.Println("b64 encoded outgoing data ", sEnc)
+	//p.OutgoingData
+	fmt.Printf("requested to sign %+v with %+v\r\n", p, w.emitter)
+	return w.emitter.Emit(w.Ctx, emitter.RequestSign, p)
 }
 
 func (w WCWallet) PublicKeyHexString() string {
@@ -159,8 +174,10 @@ type Account interface {
 
 type TokenManager interface {
 	AddBearerToken(address, cnrID string, b tokens.Token)
+	AddSessionToken(address, cnrID string, b tokens.Token)
 	NewBearerToken(table eacl.Table, lIat, lNbf, lExp uint64, temporaryKey *keys.PublicKey) (tokens.Token, error)
 	NewSessionToken(lIat, lNbf, lExp uint64, cnrID cid.ID, verb session.ContainerVerb, gateKey keys.PublicKey) (tokens.Token, error)
+	FindContainerSessionToken(address string, id cid.ID, epoch uint64) (tokens.Token, error)
 	FindBearerToken(address string, id cid.ID, epoch uint64, operation eacl.Operation) (tokens.Token, error)
 	GateKey() wal.Account
 }
@@ -180,11 +197,46 @@ type Controller struct {
 	Signer                 emitter.Emitter
 	Notifier               notification.Notifier
 	ProgressHandlerManager *notification.ProgressHandlerManager
-	pendingEvents          map[uuid.UUID]payload.Payload     //holds any asynchronous information sent to frontend
-	objectActionMap        map[uuid.UUID]ObjectActionType    // Maps payload UID to corresponding action
-	containerActionMap     map[uuid.UUID]ContainerActionType // Maps payload UID to corresponding action
+	pendingEvents          map[payload.UUID]payload.Payload     //holds any asynchronous information sent to frontend
+	objectActionMap        map[payload.UUID]ObjectActionType    // Maps payload UID to corresponding action
+	containerActionMap     map[payload.UUID]ContainerActionType // Maps payload UID to corresponding action
 }
 
+func NewCustomController(wg *sync.WaitGroup, ctx context.Context /*cancelFunc context.CancelFunc,*/, progressBarEmitter emitter.Emitter,
+	network utils.Network,
+	notifier notification.Notifier,
+	db database.Store,
+	logger *log.Logger) (Controller, error) {
+	ephemeralAccount, err := wal.NewAccount()
+	if err != nil {
+		return Controller{}, err
+	}
+	tokenManager := tokens.New(ephemeralAccount, true)
+	gateKey := tokenManager.GateKey()
+	pl, err := gspool.GetPool(ctx, gateKey.PrivateKey().PrivateKey, utils.RetrieveStoragePeers(network))
+	if err != nil {
+		fmt.Println("error getting pool ", err)
+		log.Fatal(err)
+	}
+	c := Controller{
+		selectedNetwork: network,
+		Pl:              pl,
+		wg:              wg,
+		ctx:             ctx,
+		//cancelCtx:              cancelFunc, //todo - the controller should be able to kill everything
+		OperationHandler:       make(map[string]Context),
+		logger:                 logger,
+		DB:                     db,
+		TokenManager:           tokenManager,
+		Notifier:               notifier,
+		ProgressHandlerManager: notification.NewProgressHandlerManager(notification.DataProgressHandlerFactory, progressBarEmitter),
+		pendingEvents:          make(map[payload.UUID]payload.Payload),
+		objectActionMap:        make(map[payload.UUID]ObjectActionType),
+		containerActionMap:     make(map[payload.UUID]ContainerActionType),
+	}
+	c.Notifier.ListenAndEmit() //this sends out notifications to the frontend.
+	return c, nil
+}
 func NewMockController(progressBarEmitter emitter.Emitter, network utils.Network, logger *log.Logger) (Controller, error) {
 	wg := &sync.WaitGroup{}
 	db := database.NewUnregisteredMockDB()
@@ -194,33 +246,36 @@ func NewMockController(progressBarEmitter emitter.Emitter, network utils.Network
 	}
 	notifyEmitter := notification.MockNotificationEvent{Name: "notification events:", DB: db}
 	//create a notification manager
-	ctx, cancelFunc := context.WithCancel(context.Background())
-	n := notification.NewMockNotifier(wg, notifyEmitter, ctx, cancelFunc)
+	ctx, _ := context.WithCancel(context.Background())
+	idGenerator := func() string {
+		return "mock-notifier-94d9a4c7-9999-4055-a549-f51383edfe57"
+	}
+	n := notification.NewNotificationManager(wg, notifyEmitter, ctx, idGenerator)
 	tokenManager := tokens.New(ephemeralAccount, true)
 	gateKey := tokenManager.GateKey()
 	fmt.Println("retrieving network pool, standby...")
-	pl, err := gspool.GetPool(context.Background(), gateKey.PrivateKey().PrivateKey, utils.RetrieveStoragePeers(network))
+	pl, err := gspool.GetPool(ctx, gateKey.PrivateKey().PrivateKey, utils.RetrieveStoragePeers(network))
 	if err != nil {
 		fmt.Println("error getting pool ", err)
 		log.Fatal(err)
 	}
 	c := Controller{
-		selectedNetwork:        network,
-		Pl:                     pl,
-		wg:                     wg,
-		ctx:                    ctx,
-		cancelCtx:              cancelFunc, //todo - the controller should be able to kill everything
+		selectedNetwork: network,
+		Pl:              pl,
+		wg:              wg,
+		ctx:             ctx,
+		//cancelCtx:              cancelFunc, //todo - the controller should be able to kill everything
 		OperationHandler:       make(map[string]Context),
 		logger:                 logger,
 		DB:                     db,
 		TokenManager:           tokenManager,
-		Notifier:               n,
+		Notifier:               n, //fixme - the setting of the ctx is bad...
 		ProgressHandlerManager: notification.NewProgressHandlerManager(notification.DataProgressHandlerFactory, progressBarEmitter),
-		pendingEvents:          make(map[uuid.UUID]payload.Payload),
-		objectActionMap:        make(map[uuid.UUID]ObjectActionType),
-		containerActionMap:     make(map[uuid.UUID]ContainerActionType),
+		pendingEvents:          make(map[payload.UUID]payload.Payload),
+		objectActionMap:        make(map[payload.UUID]ObjectActionType),
+		containerActionMap:     make(map[payload.UUID]ContainerActionType),
 	}
-	c.Notifier.ListenAndEmit() //this sends out notifications to the frontend.
+	c.Notifier.ListenAndEmit() //this sends out notifications to the emitter
 	return c, nil
 }
 
@@ -262,6 +317,52 @@ func (c *Controller) Account() Account {
 	return c.wallet
 }
 
+func (c *Controller) Balances() ([]wallet.Nep17Token, error) {
+	bPubKey, err := hex.DecodeString(c.wallet.PublicKeyHexString())
+	if err != nil {
+		log.Fatal("could not decode public key - ", err)
+	}
+	var pubKey neofsecdsa.PublicKeyRFC6979
+
+	err = pubKey.Decode(bPubKey)
+	if err != nil {
+		return nil, err
+	}
+	blGet := client.PrmBalanceGet{}
+	blGet.SetAccount(user.ResolveFromECDSAPublicKey(ecdsa.PublicKey(pubKey))) //id of the current connected account
+
+	fmt.Println("waiting to retrieve result")
+	neofsGasBalance, err := c.Pl.BalanceGet(context.Background(), blGet)
+	if err != nil {
+		return nil, err
+	}
+	rpcNodes := utils.RetrieveRPCNodes(c.selectedNetwork)
+	var lastErr error
+	for _, node := range rpcNodes {
+		balances, err := wallet.GetNep17Balances(c.ctx, c.wallet.Address(), node)
+		if err != nil {
+			lastErr = err
+			continue // Try the next node
+		}
+
+		// Process and return balances if successful
+		neoFSBalance := wallet.Nep17Token{
+			Asset:     util.Uint160{},                  // Use appropriate Asset ID for NeoFS if available
+			Amount:    uint64(neofsGasBalance.Value()), // Consider precision adjustment
+			Precision: int(neofsGasBalance.Precision()),
+			Symbol:    wallet.NEO_FS_GAS_BALANCE,
+		}
+		balances = append([]wallet.Nep17Token{neoFSBalance}, balances...)
+		return balances, nil
+	}
+
+	// Return the last encountered error if all RPC nodes failed
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, errors.New(utils.ErrorNotFound)
+}
+
 // these kind of have to be used in harmony
 func (c *Controller) SetAccount(a Account) {
 	c.wallet = a
@@ -282,22 +383,10 @@ func NewDefaultController(a Account) (Controller, error) {
 		Signer:                 nil,
 		Notifier:               nil,
 		ProgressHandlerManager: nil,
-		pendingEvents:          make(map[uuid.UUID]payload.Payload),
-		objectActionMap:        make(map[uuid.UUID]ObjectActionType),
+		objectActionMap:        make(map[payload.UUID]ObjectActionType),
+		pendingEvents:          make(map[payload.UUID]payload.Payload),
 	}, nil
 }
-
-//func New(db database.Store, emitter *emitter.Emitter, ctx context.Context, cancel context.CancelFunc, notifier notification.Notifier) Controller {
-//	return Controller{
-//		pendingEvents: make(map[uuid.UUID]payload.Payload),
-//		objectActionMap:     make(map[uuid.UUID]ObjectActionType),
-//		Signer:        emitter,
-//		Notifier:      notifier,
-//		cancelCtx:     cancel,
-//		ctx:           ctx,
-//		DB:            db,
-//	}
-//}
 
 func (m *Controller) Startup(ctx context.Context) {
 	//m.ctx = ctx //todo = this usually comes from Wails. However we need the cancel context available
@@ -314,19 +403,18 @@ func (c *Controller) LoadSession(wallet Account) { //todo - these fields may not
 }
 
 // RequestSign asks the wallet to begin the signing process. This assumes signing is asynchronous
-func (c *Controller) SignRequest(payload payload.Payload) error {
+func (c *Controller) SignRequest(p payload.Payload) error {
 	c.logger.Println("c.wallet SignRequest", c.wallet)
 	if c.wallet == nil {
 		return errors.New(utils.ErrorNoSession)
 	}
-	if _, ok := c.pendingEvents[payload.Uid]; ok {
+	if _, ok := c.pendingEvents[payload.UUID(p.Uid)]; ok {
 		//exists. end
 		return errors.New(utils.ErrorPendingInUse)
 	}
 	//if we have a signed request
-	c.pendingEvents[payload.Uid] = payload
-	c.logger.Println("have been requested to sign ", payload.OutgoingData)
-	return c.wallet.Sign(payload)
+	c.pendingEvents[payload.UUID(p.Uid)] = p
+	return c.wallet.Sign(p)
 }
 
 // UpdateFromPrivateKey just passes the signed payload onwrds. Use when have private key
@@ -335,13 +423,13 @@ func (c *Controller) UpdateFromPrivateKey(signedPayload payload.Payload) error {
 	if c.wallet == nil {
 		return errors.New(utils.ErrorNoSession)
 	}
-	if p, ok := c.pendingEvents[signedPayload.Uid]; ok {
+	if p, ok := c.pendingEvents[payload.UUID(signedPayload.Uid)]; ok {
 		updatedPayload := p // Dereference to get a copy of the payload
 		updatedPayload.Complete = true
 		updatedPayload.Signature = &payload.Signature{}
 		updatedPayload.Signature.HexSignature = signedPayload.Signature.HexSignature
 		// Update the map with the new struct
-		c.pendingEvents[signedPayload.Uid] = updatedPayload
+		c.pendingEvents[payload.UUID(signedPayload.Uid)] = updatedPayload
 		// Notify through the channel
 		c.logger.Println("updatedPayloadSignature ", updatedPayload.Signature.HexSignature)
 		updatedPayload.ResponseCh <- true
@@ -352,11 +440,10 @@ func (c *Controller) UpdateFromPrivateKey(signedPayload payload.Payload) error {
 
 // UpdateFromWalletConnect will be called when a signed payload is returned (use with WC)
 func (c *Controller) UpdateFromWalletConnect(signedPayload payload.Payload) error {
-	c.logger.Println("c.wallet UpdateFromWalletConnect", c.wallet)
 	if c.wallet == nil {
 		return errors.New(utils.ErrorNoSession)
 	}
-	if p, ok := c.pendingEvents[signedPayload.Uid]; ok {
+	if p, ok := c.pendingEvents[payload.UUID(signedPayload.Uid)]; ok {
 		c.logger.Println("uid ", signedPayload.Uid)
 		updatedPayload := p // Dereference to get a copy of the payload
 		updatedPayload.Complete = true
@@ -366,33 +453,29 @@ func (c *Controller) UpdateFromWalletConnect(signedPayload payload.Payload) erro
 			HexSignature: signedPayload.Signature.HexSignature,
 			HexSalt:      signedPayload.Signature.HexSalt,
 			HexPublicKey: signedPayload.Signature.HexPublicKey,
+			HexMessage:   signedPayload.Signature.HexMessage,
 		}
 		// Update the map with the new struct
-		c.pendingEvents[signedPayload.Uid] = updatedPayload
-		c.logger.Println("created updatedPayload ", updatedPayload.ResponseCh)
+		c.pendingEvents[payload.UUID(signedPayload.Uid)] = updatedPayload
 		// Notify through the channel
 		updatedPayload.ResponseCh <- true
 		return nil
 	}
+	//it could be a wallet update message
+	c.logger.Println("c.wallet UpdateFromWalletConnect", signedPayload)
 	return errors.New(utils.ErrorNotFound)
 }
 
-func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Context, cancelCtx context.CancelFunc, p container.ContainerParameter, action ContainerActionType) error {
+func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Context, cancelCtx context.CancelFunc, p payload.Parameters, action ContainerActionType) error {
+	defer cancelCtx()
+	var actionChan = make(chan notification.NewNotification)
+	// here we check whether we should run the action directly (for whatever reason)
 	if c.wallet == nil {
 		return errors.New(utils.ErrorNoSession)
 	}
-	var cnrId cid.ID
-	err := cnrId.DecodeString(p.Id)
-	if err != nil {
-		return err
-	}
-	defer cancelCtx()
-	var actionChan = make(chan notification.NewNotification)
-
-	c.logger.Println("3.1 container starting action chan handler")
+	wgMessage := "container_action_chan-" + p.ID() + "_" + utils.GetCurrentFunctionName()
+	wg.Add(1, wgMessage)
 	go func() { //todo - this is done in both action functions
-		wgMessage := "container_action_chan-" + p.Name() + "_" + utils.GetCurrentFunctionName()
-		wg.Add(1, wgMessage)
 		defer wg.Done(wgMessage)
 		for { //listen forever
 			select {
@@ -421,42 +504,123 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 			}
 		}
 	}()
-	// no need to hunt. We need a new one.
-	////todo - can this be done for containers or does it need to be a session token?
-	//if bearerToken, err := c.TokenManager.FindBearerToken(c.wallet.Address(), cnrId, p.Epoch(), p.Operation()); err == nil {
-	//	//we believe we have a token that can perform
-	//	//the action should now be passed what it was going to be passed anyway, along with the token that it can use to make the request.
-	//	//these actions will be responsible for notifying UI themselves (i.e progress bars etc)
-	//	if err := action(wg, ctx, p, actionChan, bearerToken); err != nil {
-	//		//notification (interface) handler would handle any errors here. (c.notificationHandler interface type)
-	//		return err
-	//	}
-	//	return nil // this task has been triggered. No need to continue
-	//}
+	containerParameters, ok := p.(container.ContainerParameter)
+	if !ok {
+		return errors.New("parameters not valid")
+	}
+	fmt.Println("Type assertion:", reflect.TypeOf(containerParameters))
+	fmt.Printf("action manager retrieved container parameters %+v\r\n", containerParameters)
+	var cnrId cid.ID
+	fmt.Println("decoding ", p.ID())
+
+	if err := cnrId.DecodeString(p.ID()); err != nil || containerParameters.Verb == 0 { //unknown verb for container unnamed
+		fmt.Println("verb is empty. We are going to just attempt the action directly.")
+		//no container ID. lets try anyway
+		if err := action(wg, ctx, containerParameters, actionChan, nil); err != nil {
+			//handle the error with the UI (n)
+			fmt.Println("error executing action ", err)
+
+			return err
+		}
+		fmt.Println("waiting for action to complete...")
+		wg.Wait()
+		fmt.Println("finished waiting for action to complete...")
+		return nil
+	}
+
+	if containerParameters.Session { //forcing the creation of new session token for containers every time?
+		//if tok, err := c.TokenManager.FindContainerSessionToken(c.wallet.Address(), cnrId, p.Epoch()); err == nil {
+		//	//we believe we have a token that can perform
+		//	//the action should now be passed what it was going to be passed anyway, along with the token that it can use to make the request.
+		//	//these actions will be responsible for notifying UI themselves (i.e progress bars etc)
+		//	if t, ok := tok.(*tokens.ContainerSessionToken); !ok {
+		//		return errors.New("no session token available")
+		//	} else {
+		//		fmt.Println("using container session toke ", t.SessionToken.ID())
+		//	}
+		//	fmt.Println("FOUND - session token ", tok)
+		//	if err := action(wg, ctx, containerParameters, actionChan, tok); err != nil {
+		//		//notification (interface) handler would handle any errors here. (c.notificationHandler interface type)
+		//		return err
+		//	}
+		//	fmt.Println("waiting for action to complete...")
+		//	wg.Wait()
+		//	fmt.Println("finished waiting for action to complete...")
+		//	return nil // this task has been triggered. No need to continue
+		//}
+
+		fmt.Println("just going to always force session token creation")
+	} else {
+		if tok, err := c.TokenManager.FindBearerToken(c.wallet.Address(), cnrId, p.Epoch(), eacl.OperationSearch); err == nil {
+			if t, ok := tok.(*tokens.BearerToken); !ok {
+				return errors.New("no session token available")
+			} else {
+				if err := action(wg, ctx, containerParameters, actionChan, t); err != nil {
+					//notification (interface) handler would handle any errors here. (c.notificationHandler interface type)
+					return err
+				}
+				fmt.Println("waiting for action to complete...")
+				wg.Wait()
+				fmt.Println("finished waiting for action to complete...")
+
+				return nil // this task has been triggered. No need to continue
+			}
+		}
+	}
+
 	var neoFSPayload payload.Payload
-	neoFSPayload.Uid = uuid.New()
+	neoFSPayload.Uid = payload.UUID(uuid.New().String())
 	neoFSPayload.ResponseCh = make(chan bool)
 	c.logger.Println("created responsechannel ", neoFSPayload.ResponseCh)
 	// Store the action in the map
-	c.containerActionMap[neoFSPayload.Uid] = action
-	key := c.TokenManager.GateKey()
-	sessionToken, err := c.TokenManager.NewSessionToken(0, 0, 0, cnrId, p.Verb, *key.PublicKey()) //mock this out for different wallet types
+	c.containerActionMap[payload.UUID(neoFSPayload.Uid)] = action
+	//key := c.TokenManager.GateKey()
+	//fixme we need to use tokens if they already exist but...
+	iAt, exp, err := gspool.TokenExpiryValue(ctx, c.Pl, 100)
+
+	//convert user's public key to create a session for them
+
+	bPubKey, err := hex.DecodeString(c.wallet.PublicKeyHexString())
+	if err != nil {
+		log.Fatal("could not decode public key - ", err)
+	}
+	var pubKey neofsecdsa.PublicKeyRFC6979
+
+	err = pubKey.Decode(bPubKey)
 	if err != nil {
 		return err
 	}
 
-	////update the payload to the data to sign
-	neoFSPayload.OutgoingData = sessionToken.SignedData()
+	var token tokens.Token
+	if containerParameters.Session {
+		//fixme - can verb become an operation and we instead use p.Operation()?
+		token, err = c.TokenManager.NewSessionToken(iAt, iAt, exp, cnrId, containerParameters.Verb, keys.PublicKey(pubKey)) //mock this out for different wallet types
+		if err != nil {
+			return err
+		}
+	} else {
+		fmt.Println("creating a bearer token for container retrieval")
+		nodes := utils.RetrieveStoragePeers(c.selectedNetwork)
+		//todo - this all needs sorted
+		//this can then probably move to the token manager now to create a new token.
+		bt, err := object.ContainerBearerToken(p, nodes) // fixme - this won't suffice for containers.
+		if err != nil {
+			fmt.Println("failed to create bearer ", err)
+			return err
+		}
+		token = &tokens.BearerToken{BearerToken: &bt}
+	}
+	neoFSPayload.OutgoingData = token.SignedData()
 
 	//c.logger.Println("bearer token data to sign (bearerToken.SignedData()) ", neoFSPayload.OutgoingData)
 	// Wait for the payload to be signed in a separate goroutine
-
+	//fmt.Println("requesting action ", action, " for ", p.ID())
+	containerActionWGMessage := "container_action_exec" + p.ID() + "_" + utils.GetCurrentFunctionName()
+	wg.Add(1, containerActionWGMessage)
 	go func() {
-		wgMessage := "container_action_exec" + p.Name() + "_" + utils.GetCurrentFunctionName()
-		wg.Add(1, wgMessage)
 		defer func() {
 			cancelCtx()
-			wg.Done(wgMessage)
+			wg.Done(containerActionWGMessage)
 			c.logger.Println("3. perform action stopped")
 		}()
 		for {
@@ -467,25 +631,49 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 			case <-neoFSPayload.ResponseCh: //waiting for a signing
 				//we just received a signed token payload. Lets recreate the associated token
 				// Payload signed, perform the action
+				//we now need to add the signed token to the map
+				//success? add it to list.
 				var latestPayload payload.Payload
-				//c.logger.Printf("payload - ", neoFSPayload)
-				if pendingPayload, exists := c.pendingEvents[neoFSPayload.Uid]; exists {
+				if pendingPayload, exists := c.pendingEvents[payload.UUID(neoFSPayload.Uid)]; exists {
 					latestPayload = pendingPayload
 				} else {
 					return
 				}
-				if act, exists := c.containerActionMap[latestPayload.Uid]; exists {
+				if err := token.Sign(c.wallet.Address(), latestPayload); err != nil {
+					c.logger.Println("error signing token ", err)
+					return
+				}
+				token.SetSignature(*latestPayload.Signature) //fix me - get rid of this and the getter
+				//attach the signature we received to the token. It may be used to create signers later.
+				if containerParameters.Session {
+					//todo - is it possible that by the time we add the token and sign it, we haven't
+					//got a signed token available when we ask for one again?
+					//i.e how do we know this is signed???
+					c.TokenManager.AddSessionToken(c.wallet.Address(), cnrId.String(), token)
+				} else {
+					c.TokenManager.AddBearerToken(c.Account().Address(), cnrId.String(), token) //listing container contents is done with a bearer
+				}
+				if act, exists := c.containerActionMap[payload.UUID(latestPayload.Uid)]; exists {
 					//fixme - this should be a session token
-					if err := sessionToken.Sign(c.wallet.Address(), latestPayload); err != nil {
+					if err := token.Sign(c.wallet.Address(), latestPayload); err != nil {
 						c.logger.Println("error signing token ", err)
 						return
 					}
-					if err := act(wg, ctx, p, actionChan, sessionToken); err != nil {
+					//check for specifically session token signing
+					if t, ok := token.(*tokens.ContainerSessionToken); ok {
+						fmt.Println("verifying that the session has been signed")
+						if !t.SessionToken.VerifySignature() {
+							fmt.Println("verifying signature failed for container session token")
+							return
+						}
+						fmt.Println("token passed verification. Attemping container action.")
+					}
+					if err := act(wg, ctx, containerParameters, actionChan, token); err != nil {
 						//handle the error with the UI (n)
 						c.logger.Println("error executing action ", err)
 						return
 					}
-					delete(c.objectActionMap, neoFSPayload.Uid) // Clean up
+					delete(c.objectActionMap, payload.UUID(neoFSPayload.Uid)) // Clean up
 				}
 			}
 		}
@@ -537,14 +725,14 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 				}
 				c.logger.Println("success type, creating notification for database")
 				if not.Type == notification.Success { //do this before sending the notification success
-					//if err := c.DB.Create(database.NotificationBucket, p.ID(), []byte{}); err != nil {
-					//	c.Notifier.QueueNotification(c.Notifier.Notification(
-					//		"failed to store in database",
-					//		"error storing object reference in db "+err.Error(),
-					//		notification.Error,
-					//		notification.ActionNotification))
-					//}
-					fmt.Println("WE RECEIVED [CONTAINER] SUCCESS!")
+					if err := c.DB.Create(database.NotificationBucket, p.ID(), []byte{}); err != nil {
+						c.Notifier.QueueNotification(c.Notifier.Notification(
+							"failed to store in database",
+							"error storing object reference in db "+err.Error(),
+							notification.Error,
+							notification.ActionNotification))
+					}
+					fmt.Println("WE RECEIVED [OBJECT] SUCCESS!")
 				}
 				c.Notifier.QueueNotification(not)
 				c.logger.Println("3 closing everything down")
@@ -561,28 +749,65 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 		//we believe we have a token that can perform
 		//the action should now be passed what it was going to be passed anyway, along with the token that it can use to make the request.
 		//these actions will be responsible for notifying UI themselves (i.e progress bars etc)
-		if err := action(wg, ctx, p, actionChan, bearerToken); err != nil {
-			//notification (interface) handler would handle any errors here. (c.notificationHandler interface type)
+		var objectParameters object.ObjectParameter
+		var ok bool
+		//var objectWriteCloser io.WriteCloser
+		if objectParameters, ok = p.(object.ObjectParameter); ok {
+			if p.Operation() == eacl.OperationGet {
+				//if objectParameters, ok = p.(object.ObjectParameter); ok {
+				_, objectReader, err := object.InitReader(ctx, objectParameters, bearerToken)
+				if err != nil {
+					return err
+				}
+				if ds, ok := objectParameters.ReadWriter.(*readwriter.DualStream); ok {
+					ds.Reader = objectReader
+				} else {
+					return errors.New("not a dual stream")
+				}
+				//thought: you could use the destinationObject to update the UI before its downloaded with an emitter
+				//destinationObject.PayloadSize() //use this with the progress bar
+			}
+			//else if p.Operation() == eacl.OperationPut {
+			//	objectWriteCloser, err = object.InitWriter(ctx, &objectParameters, bearerToken)
+			//	if err != nil {
+			//		return err
+			//	}
+			//	if ds, ok := objectParameters.ReadWriter.(*readwriter.DualStream); ok {
+			//		ds.Writer = objectWriteCloser
+			//	} else {
+			//		return errors.New("not a dual stream")
+			//	}
+			//}
+		} else {
+			fmt.Println("operation get, but no objectparameterss. Bailing out")
+			return err
+		}
+		if err := action(wg, ctx, objectParameters, actionChan, bearerToken); err != nil {
 			return err
 		}
 		return nil // this task has been triggered. No need to continue
 	}
 	var neoFSPayload payload.Payload
-	neoFSPayload.Uid = uuid.New()
+	neoFSPayload.Uid = payload.UUID(uuid.New().String())
 	neoFSPayload.ResponseCh = make(chan bool)
 	c.logger.Println("created responsechannel ", neoFSPayload.ResponseCh)
 	// Store the action in the map
-	c.objectActionMap[neoFSPayload.Uid] = action
+	c.objectActionMap[payload.UUID(neoFSPayload.Uid)] = action
 
-	key := c.TokenManager.GateKey()
+	//key := c.TokenManager.GateKey()
 	nodes := utils.RetrieveStoragePeers(c.selectedNetwork)
 	//todo - this all needs sorted
-	bt, err := object.ObjectBearerToken(p, nodes) // fixme - this won't suffice for containers.
+	bt, err := object.ObjectBearerToken(cnrId, p, nodes) // fixme - this won't suffice for containers.
 	//fixme - the expiries are not set
-	bearerToken, err := c.TokenManager.NewBearerToken(bt.EACLTable(), 0, 0, 0, key.PublicKey()) //mock this out for different wallet types
-	if err != nil {
-		return err
-	}
+	//iAt, exp, err := gspool.TokenExpiryValue(ctx, c.Pl, 100)
+	//if err != nil {
+	//	return err
+	//}
+	bearerToken := &tokens.BearerToken{BearerToken: &bt}
+	//bearerToken, err := c.TokenManager.NewBearerToken(bt.EACLTable(), iAt, iAt, exp, key.PublicKey()) //mock this out for different wallet types
+	//if err != nil {
+	//	return err
+	//}
 
 	////update the payload to the data to sign
 	neoFSPayload.OutgoingData = bearerToken.SignedData()
@@ -616,11 +841,56 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 						c.logger.Println("error signing token ", err)
 						return
 					}
-					if err := act(wg, ctx, p, actionChan, bearerToken); err != nil {
+					//for certain actions objects need a 'pre-requisite'
+					//we need to run this first. We can use the operation to check
+					var objectParameters object.ObjectParameter
+					var ok bool
+					//var objectWriteCloser io.WriteCloser
+					if objectParameters, ok = p.(object.ObjectParameter); ok {
+						if p.Operation() == eacl.OperationGet {
+							//if objectParameters, ok = p.(object.ObjectParameter); ok {
+							_, objectReader, err := object.InitReader(ctx, objectParameters, bearerToken)
+							if err != nil {
+								return
+							}
+							if ds, ok := objectParameters.ReadWriter.(*readwriter.DualStream); ok {
+								ds.Reader = objectReader
+							} else {
+								return
+							}
+							//thought: you could use the destinationObject to update the UI before its downloaded with an emitter
+							//destinationObject.PayloadSize() //use this with the progress bar
+						}
+						//else if p.Operation() == eacl.OperationPut {
+						//	//fixme - mutating the objectParameters here for the ID? Good idea?
+						//	objectWriteCloser, err := object.InitWriter(ctx, &objectParameters, bearerToken)
+						//	if err != nil {
+						//		return
+						//	}
+						//	if ds, ok := objectParameters.ReadWriter.(*readwriter.DualStream); ok {
+						//		ds.Writer = objectWriteCloser
+						//	} else {
+						//		return
+						//	}
+						//}
+					} else {
+						fmt.Println("operation get, but no objectparameterss. Bailing out")
+						return
+					}
+					if err := act(wg, ctx, objectParameters, actionChan, bearerToken); err != nil {
 						//handle the error with the UI (n)
 						c.logger.Println("error executing action ", err)
 						return
 					}
+					//else if p.Operation() == eacl.OperationPut {
+					//	if payloadWriter, ok := objectWriteCloser.(*slicer.PayloadWriter); ok { //todo - this should really be moved to the object itself.
+					//		fmt.Println("closing writer")
+					//		if err := payloadWriter.Close(); err != nil {
+					//			return
+					//		}
+					//		fmt.Println("writing ID to ", payloadWriter.ID().String(), "p.Id ", payloadWriter.ID())
+					//	}
+					//}
 					delete(c.objectActionMap, neoFSPayload.Uid) // Clean up
 				}
 			}
@@ -639,4 +909,53 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 	c.logger.Println("FINISH closed action ", action)
 	fmt.Println("groups - ", wg.Groups())
 	return nil
+}
+
+// fixme - this might want to return more information
+func (c *Controller) NetworkInformation() string {
+	return utils.RetrieveNetworkFileSystemAddress(c.selectedNetwork)
+}
+
+// InitGasTransfer crafts the transaction but does not sign it.  A wallet must now sign it and call ConcludeTranscation.
+func (c *Controller) InitGasTransfer(recipientAddress string, amount float64) (payload.Payload, error) {
+	bPubKey, err := hex.DecodeString(c.Account().PublicKeyHexString())
+	if err != nil {
+		return payload.Payload{}, fmt.Errorf("decode HEX public key from WalletConnect: %w", err)
+	}
+
+	var pubKey neofsecdsa.PublicKeyWalletConnect
+
+	err = pubKey.Decode(bPubKey)
+	if err != nil {
+		return payload.Payload{}, fmt.Errorf("invalid/unsupported public key format from WalletConnect: %w", err)
+	}
+	//fixme - the websocket should be part of the network data
+	//fixme - why are we recreating the wallet here from public key when the controller has the wallet? test both.
+	//however its this or cast the c.Account back to a wallet.Account...
+	unsignedTransaction, err := wallet.CreateWCTransaction(wallet.NewAccountFromPublicKey((ecdsa.PublicKey)(pubKey)), wallet.RPC_WEBSOCKET, recipientAddress, amount)
+	p := payload.Payload{
+		OutgoingData: unsignedTransaction.Hash().BytesBE(),
+		MetaData:     unsignedTransaction.Bytes(),
+	}
+	return p, err
+}
+
+func (c *Controller) ConcludeTransaction(transactionData, signedData []byte) (string, error) {
+	//fixme - this should select the websocket url based on some parameter
+	bPubKey, err := hex.DecodeString(c.Account().PublicKeyHexString())
+	if err != nil {
+		return "", fmt.Errorf("decode HEX public key from WalletConnect: %w", err)
+	}
+
+	var pubKey neofsecdsa.PublicKeyWalletConnect
+
+	err = pubKey.Decode(bPubKey)
+	if err != nil {
+		return "", fmt.Errorf("invalid/unsupported public key format from WalletConnect: %w", err)
+	}
+	txId, err := wallet.SubmitWCTransaction(wallet.NewAccountFromPublicKey((ecdsa.PublicKey)(pubKey)), wallet.RPC_WEBSOCKET, transactionData, signedData)
+	if err != nil {
+		return "", err
+	}
+	return txId, nil
 }

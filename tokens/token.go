@@ -2,6 +2,7 @@ package tokens
 
 import (
 	"crypto/ecdsa"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -27,14 +28,23 @@ import (
 type Token interface {
 	InvalidAt(epoch uint64) bool
 	Sign(issuerAddress string, p payload.Payload) error
+	GetSignature() payload.Signature
+	SetSignature(signature payload.Signature)
 	SignedData() []byte
 }
 
 type PrivateSessionToken struct {
+	Signature    payload.Signature
 	SessionToken *session.Container
 	Wallet       *wallet.Account
 }
 
+func (m *PrivateSessionToken) SetSignature(s payload.Signature) {
+	m.Signature = s
+}
+func (m PrivateSessionToken) GetSignature() payload.Signature {
+	return m.Signature
+}
 func (m PrivateSessionToken) InvalidAt(epoch uint64) bool {
 	return false
 }
@@ -51,10 +61,17 @@ func (m PrivateSessionToken) SignedData() []byte {
 }
 
 type PrivateBearerToken struct {
+	Signature   payload.Signature
 	BearerToken *bearer.Token
 	Wallet      *wallet.Account
 }
 
+func (m *PrivateBearerToken) SetSignature(s payload.Signature) {
+	m.Signature = s
+}
+func (m PrivateBearerToken) GetSignature() payload.Signature {
+	return m.Signature
+}
 func (m PrivateBearerToken) InvalidAt(epoch uint64) bool {
 	return false
 }
@@ -132,7 +149,7 @@ func (t PrivateKeyTokenManager) NewSessionToken(lIat, lNbf, lExp uint64, cnrID c
 	}
 	issuer = user.ResolveFromECDSAPublicKey(ecdsa.PublicKey(pubKey))
 	sessionToken.SetIssuer(issuer)
-	return PrivateSessionToken{
+	return &PrivateSessionToken{
 		SessionToken: sessionToken,
 		Wallet:       &t.W,
 	}, nil
@@ -146,21 +163,21 @@ func (t PrivateKeyTokenManager) NewBearerToken(table eacl.Table, lIat, lNbf, lEx
 	bearerToken.SetExp(lExp)
 	bearerToken.SetIat(lIat)
 	bearerToken.SetNbf(lNbf)
-	return PrivateBearerToken{Wallet: &t.W, BearerToken: &bearerToken}, nil
+	return &PrivateBearerToken{Wallet: &t.W, BearerToken: &bearerToken}, nil
 }
 func (t PrivateKeyTokenManager) FindBearerToken(address string, id cid.ID, epoch uint64, operation eacl.Operation) (Token, error) {
 
 	if tok, ok := t.BearerTokens[fmt.Sprintf("%s.%s", address, id)]; !ok || tok.InvalidAt(1) {
-		return PrivateBearerToken{}, errors.New(utils.ErrorNoToken)
+		return nil, errors.New(utils.ErrorNoToken)
 	} else {
-		tok, ok := tok.(PrivateBearerToken)
+		tok, ok := tok.(*PrivateBearerToken)
 		if !ok {
 			return nil, errors.New(utils.ErrorNoToken)
 		}
 		bearerToken := tok.BearerToken
 		// we now need to check the rules the token needs to have
 		if !bearerToken.AssertContainer(id) {
-			return PrivateBearerToken{}, errors.New(utils.ErrorNoToken)
+			return nil, errors.New(utils.ErrorNoToken)
 		}
 		if tok.InvalidAt(epoch) { //fix me unnecessary
 			return tok, errors.New(utils.ErrorNoToken)
@@ -172,7 +189,7 @@ func (t PrivateKeyTokenManager) FindBearerToken(address string, id cid.ID, epoch
 			}
 		}
 	}
-	return PrivateBearerToken{}, errors.New(utils.ErrorNoToken)
+	return nil, errors.New(utils.ErrorNoToken)
 }
 
 func (t PrivateKeyTokenManager) GateKey() wallet.Account {
@@ -181,8 +198,15 @@ func (t PrivateKeyTokenManager) GateKey() wallet.Account {
 
 type ContainerSessionToken struct {
 	SessionToken *session.Container
+	Signature    payload.Signature
 }
 
+func (c *ContainerSessionToken) SetSignature(s payload.Signature) {
+	c.Signature = s
+}
+func (m ContainerSessionToken) GetSignature() payload.Signature {
+	return m.Signature
+}
 func (s ContainerSessionToken) InvalidAt(epoch uint64) bool {
 	return s.SessionToken.InvalidAt(epoch)
 }
@@ -195,11 +219,18 @@ func (s ContainerSessionToken) Sign(issuerAddress string, p payload.Payload) err
 	if s.SessionToken == nil {
 		return errors.New(utils.ErrorNoToken)
 	}
-	var issuer user.ID
-	err := issuer.DecodeString(issuerAddress)
+	//var issuer user.ID
+	fmt.Printf("payload signature %+v\r\n", p.Signature)
+	//err := issuer.DecodeString(issuerAddress)
+	bPubKey, err := hex.DecodeString(p.Signature.HexPublicKey)
 	if err != nil {
 		return err
 	}
+	var pubKey neofsecdsa.PublicKeyWalletConnect
+	if err := pubKey.Decode(bPubKey); err != nil {
+		return err
+	}
+	issuer := user.ResolveFromECDSAPublicKey(ecdsa.PublicKey(pubKey))
 	if p.Signature == nil {
 		return errors.New(utils.ErrorNoSignature)
 	}
@@ -214,31 +245,30 @@ func (s ContainerSessionToken) Sign(issuerAddress string, p payload.Payload) err
 		return err
 	}
 
-	bPubKey, err := hex.DecodeString(p.Signature.HexPublicKey)
-	if err != nil {
-		return err
-	}
-	var pubKey neofsecdsa.PublicKeyWalletConnect
-	err = pubKey.Decode(bPubKey)
-	if err != nil {
-		return err
-	}
 	staticSigner := neofscrypto.NewStaticSigner(neofscrypto.ECDSA_WALLETCONNECT, append(bSig, salt...), &pubKey)
 	err = s.SessionToken.Sign(user.NewSigner(staticSigner, issuer))
 	if err != nil {
 		return err
 	}
-	//fixme!!
-	//if !s.SessionToken.VerifySignature() {
-	//	return errors.New(utils.ErrorNoSignature)
-	//}
+	fmt.Println("container session token has been signed")
+	if !s.SessionToken.VerifySignature() {
+		fmt.Println("verifying signature failed for container session token")
+		return errors.New(utils.ErrorNoSignature)
+	}
 	return nil
 }
 
 type BearerToken struct {
+	Signature   payload.Signature
 	BearerToken *bearer.Token
 }
 
+func (b *BearerToken) SetSignature(s payload.Signature) {
+	b.Signature = s
+}
+func (m BearerToken) GetSignature() payload.Signature {
+	return m.Signature
+}
 func (b BearerToken) Sign(issuerAddress string, p payload.Payload) error {
 	if b.BearerToken == nil {
 		return errors.New(utils.ErrorNoToken)
@@ -298,13 +328,14 @@ func (b BearerToken) SignedData() []byte {
 // for now just bearer tokens, for object actions, containers use sessions and will sign for each action
 // listing containers does not need a token
 type WalletConnectTokenManager struct {
-	Persisted    bool             //use a fake/mock token for the time being that matches the mock emitter's signatures (todo - clean this up)Z
-	BearerTokens map[string]Token //Will be loaded from database if we want to keep sessions across closures.
-	W            *wallet.Account
+	Persisted     bool             //use a fake/mock token for the time being that matches the mock emitter's signatures (todo - clean this up)Z
+	BearerTokens  map[string]Token //Will be loaded from database if we want to keep sessions across closures.
+	SessionTokens map[string]Token //fixme - can this all be one in memory token store or do they need to be seperated
+	W             *wallet.Account
 }
 
 func New(a *wallet.Account, persist bool) WalletConnectTokenManager {
-	return WalletConnectTokenManager{W: a, BearerTokens: make(map[string]Token), Persisted: persist}
+	return WalletConnectTokenManager{W: a, BearerTokens: make(map[string]Token), SessionTokens: make(map[string]Token), Persisted: persist}
 }
 
 func (t WalletConnectTokenManager) GateKey() wallet.Account {
@@ -317,64 +348,35 @@ func (t WalletConnectTokenManager) AddBearerToken(address, cnrID string, b Token
 
 // FindBearerToken should see if we have a valid token to do the job. If not create a new one.
 func (t WalletConnectTokenManager) FindBearerToken(address string, id cid.ID, epoch uint64, operation eacl.Operation) (Token, error) {
-	if tok, ok := t.BearerTokens[fmt.Sprintf("%s.%s", address, id)]; ok && tok.InvalidAt(1) {
-		tok, ok := tok.(BearerToken)
+	fmt.Println("looking for bearer for action ", operation)
+	if tok, ok := t.BearerTokens[fmt.Sprintf("%s.%s", address, id)]; ok {
+		tok, ok := tok.(*BearerToken)
 		if !ok {
 			return nil, errors.New("no beaer token")
 		}
+		fmt.Println("and... its a bearer token. Lets go!")
 		bearerToken := tok.BearerToken
 		// we now need to check the rules the token needs to have
 		if !bearerToken.AssertContainer(id) {
-			return BearerToken{}, errors.New(utils.ErrorNoToken)
+			return nil, errors.New(utils.ErrorNoToken)
 		}
-		if tok.InvalidAt(epoch) {
-			return tok, errors.New(utils.ErrorNoToken)
-		}
+		//if tok.InvalidAt(epoch) {
+		//	return tok, errors.New(utils.ErrorNoToken)
+		//}
 		records := bearerToken.EACLTable().Records()
 		for _, v := range records {
 			if v.Operation() == operation && v.Action() == eacl.ActionAllow {
+				fmt.Println("returning/found action allow for operation ", v.Operation())
 				return tok, nil
 			}
 		}
-		return BearerToken{}, errors.New(utils.ErrorNoToken)
+		return nil, errors.New(utils.ErrorNoToken)
 	}
-	return BearerToken{}, errors.New(utils.ErrorNoToken)
-}
-
-func (t *WalletConnectTokenManager) WrapToken(token bearer.Token) Token {
-	return BearerToken{&token}
-}
-
-func (t WalletConnectTokenManager) NewSessionToken(lIat, lNbf, lExp uint64, cnrID cid.ID, verb session.ContainerVerb, gateKey keys.PublicKey) (Token, error) {
-	sessionToken := new(session.Container)
-	sessionToken.ForVerb(verb)
-	sessionToken.AppliedTo(cnrID)
-	sessionToken.SetID(uuid.New())
-	sessionToken.SetAuthKey((*neofsecdsa.PublicKey)(&gateKey))
-	sessionToken.SetIat(lIat)
-	sessionToken.SetNbf(lNbf)
-	sessionToken.SetExp(lExp)
-
-	var issuer user.ID
-	/*
-		bPubKey, err := hex.DecodeString(t.W.PublicKey().String())
-		if err != nil {
-			return nil, fmt.Errorf("decode HEX public key from WalletConnect: %w", err)
-		}
-		var pubKey neofsecdsa.PublicKeyWalletConnect
-		err = pubKey.Decode(bPubKey)
-		if err != nil {
-			return nil, fmt.Errorf("invalid/unsupported public key format from WalletConnect: %w", err)
-		}*/
-	fmt.Println("WC sessioin token from key ", t.W.PublicKey().String())
-	issuer = user.ResolveFromECDSAPublicKey(*(*ecdsa.PublicKey)(t.W.PublicKey())) //todo - where does this key come from?
-	sessionToken.SetIssuer(issuer)
-	return ContainerSessionToken{
-		SessionToken: sessionToken,
-	}, nil
+	return nil, errors.New(utils.ErrorNoToken)
 }
 
 // NewBearerToken - if we don't have a valid bearer token, we'll need to create a new one.
+// fixme - this is incorrectly producing a token. Use tokens.BearerToken instead.
 func (t WalletConnectTokenManager) NewBearerToken(table eacl.Table, lIat, lNbf, lExp uint64, temporaryKey *keys.PublicKey) (Token, error) {
 	var bearerToken bearer.Token
 	if t.Persisted { //hack so we don't need a completely different interaface
@@ -390,7 +392,58 @@ func (t WalletConnectTokenManager) NewBearerToken(table eacl.Table, lIat, lNbf, 
 		bearerToken.SetIat(lIat)
 		bearerToken.SetNbf(lNbf)
 	}
-	return BearerToken{&bearerToken}, nil
+	return &BearerToken{BearerToken: &bearerToken}, nil
+}
+
+func (t *WalletConnectTokenManager) WrapToken(token bearer.Token) Token {
+	return &BearerToken{BearerToken: &token}
+}
+func (t WalletConnectTokenManager) AddSessionToken(address, cnrID string, b Token) {
+	t.SessionTokens[fmt.Sprintf("%s.%s", address, cnrID)] = b
+}
+
+// FindBearerToken should see if we have a valid token to do the job. If not create a new one.
+func (t WalletConnectTokenManager) FindContainerSessionToken(address string, id cid.ID, epoch uint64) (Token, error) {
+	if tok, ok := t.SessionTokens[fmt.Sprintf("%s.%s", address, id)]; ok && tok.InvalidAt(1) {
+		tok, ok := tok.(*ContainerSessionToken)
+		if !ok {
+			return nil, errors.New("no session token")
+		}
+		// we now need to check the rules the token needs to have
+		//if !sessionToken.Ass.AssertContainer(id) {
+		//	return BearerToken{}, errors.New(utils.ErrorNoToken)
+		//}
+		//we can check a verb if we like.
+		if tok.InvalidAt(epoch) {
+			return tok, errors.New(utils.ErrorNoToken)
+		}
+		return tok, nil
+	}
+	return nil, errors.New(utils.ErrorNoToken)
+}
+
+func (t WalletConnectTokenManager) NewSessionToken(lIat, lNbf, lExp uint64, cnrID cid.ID, verb session.ContainerVerb, issuerKey keys.PublicKey) (Token, error) {
+	sessionToken := new(session.Container)
+	sessionToken.ForVerb(verb)
+	sessionToken.SetID(uuid.New())
+	ephemeralGateKey := t.W.PublicKey()
+	sessionToken.SetAuthKey((*neofsecdsa.PublicKey)(ephemeralGateKey))
+	sessionToken.SetIat(lIat)
+	sessionToken.SetNbf(lNbf)
+	sessionToken.SetExp(lExp)
+	sessionToken.ApplyOnlyTo(cnrID)
+
+	var issuer user.ID
+	fmt.Println("WC sessioin token from key ", t.W.PublicKey().String())
+	issuer = user.ResolveFromECDSAPublicKey(ecdsa.PublicKey((issuerKey))) //todo - where does this key come from?
+	sessionToken.SetIssuer(issuer)
+	fmt.Printf("issuer %+v --- is issuer \r\n", issuer, sessionToken.ID())
+	mar := sessionToken.Marshal()
+	sEnc := base64.StdEncoding.EncodeToString(mar)
+	fmt.Println("marshalled session token ", mar, "b64:", sEnc)
+	return &ContainerSessionToken{
+		SessionToken: sessionToken,
+	}, nil
 }
 
 //
@@ -454,7 +507,7 @@ func stringToBytes(byt string) []byte {
 	for _, part := range bDataParts {
 		num, err := strconv.Atoi(strings.TrimSpace(part))
 		if err != nil {
-			fmt.Errorf("Error converting string to int:", err)
+			fmt.Println("Error converting string to int:", err)
 		}
 		bData = append(bData, byte(num))
 	}

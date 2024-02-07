@@ -2,7 +2,7 @@ package object
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"github.com/configwizard/sdk/config"
 	"github.com/configwizard/sdk/payload"
 	"github.com/nspcc-dev/neofs-sdk-go/bearer"
@@ -13,22 +13,20 @@ import (
 	"time"
 )
 
-func ObjectBearerToken(p payload.Parameters, nodes []config.Peer) (bearer.Token, error) {
+// fixme - move this file out of object.
+func ContainerBearerToken(p payload.Parameters, nodes []config.Peer) (bearer.Token, error) {
 	var cnrID cid.ID
-	if err := cnrID.DecodeString(p.ParentID()); err != nil {
+	if err := cnrID.DecodeString(p.ID()); err != nil {
 		return bearer.Token{}, err
 	}
+	return ObjectBearerToken(cnrID, p, nodes)
+}
+func ObjectBearerToken(cnrID cid.ID, p payload.Parameters, nodes []config.Peer) (bearer.Token, error) {
 	gA, err := p.ForUser()
 	if err != nil {
 		return bearer.Token{}, err
 	}
-	//params, ok := p.(*ObjectParameter)
-	//if !ok {
-	//	return bearer.Token{}, errors.New("no object parameters")
-	//}
 	var gateSigner user.Signer = user.NewAutoIDSignerRFC6979(gA.PrivateKey().PrivateKey)
-
-	//nodeSelection := config.NewNetworkSelector(nodes)
 	var prmDial client.PrmDial
 	prmDial.SetTimeout(30 * time.Second)
 	prmDial.SetStreamTimeout(30 * time.Second)
@@ -37,53 +35,53 @@ func ObjectBearerToken(p payload.Parameters, nodes []config.Peer) (bearer.Token,
 	if err != nil {
 		return bearer.Token{}, err
 	}
-	//for {
-	//	node, err := nodeSelection.GetNext()
-	//	if err != nil {
-	//		return bearer.Token{}, err
-	//	}
-	//	prmDial.SetServerURI(node.Address)
-	//	//fixme: this may well be very slow and we might want to do it earlier somewhere - ask Roman
-	//	if err := sdkCli.Dial(prmDial); err != nil {
-	//		fmt.Printf("Error connecting to node %s: %s\n", node.Address, err)
-	//		continue
-	//	} else {
-	//		break
-	//	}
-	//}
-	//var prmDial client.PrmDial
-	//
-	//prmDial.SetTimeout(60 * time.Second)
-	//prmDial.SetStreamTimeout(60 * time.Second)
-	//prmDial.SetContext(context.Background())
-	//
-	//prmCli := client.PrmInit{}
-	//cli, err := client.New(prmCli)
 	netInfo, err := sdkCli.NetworkInfo(context.Background(), client.PrmNetworkInfo{})
 	if err != nil {
 		return bearer.Token{}, err
 	}
-	//config.NewNetworkSelector(utils.networks.)
-	//prmDial.SetServerURI(node.Address)
-	//prmDial.SetServerURI(node.Address)
 	var bearerToken bearer.Token
 	bearerToken.ForUser(gateSigner.UserID())
 	bearerToken.SetIat(netInfo.CurrentEpoch())
 	bearerToken.SetNbf(netInfo.CurrentEpoch())
-	bearerToken.SetExp(netInfo.CurrentEpoch() + 100) // or particular exp value
-	bearerToken.EACLTable()
-	r := eacl.Record{}
-	equal := eacl.MatchStringEqual
-	equal.DecodeString(cnrID.String())
-	r.AddObjectContainerIDFilter(equal, cnrID)
-	if p.Operation() == eacl.OperationUnknown {
-		return bearer.Token{}, errors.New("need bearer token operation")
-	}
-	r.SetOperation(p.Operation())
-	r.SetAction(eacl.ActionAllow)
+	bearerToken.SetExp(netInfo.CurrentEpoch() + p.Epoch()) // or particular exp value
 	tab := eacl.Table{}
-	tab.AddRecord(&r)
-	bearerToken.SetEACLTable(tab)
+	tab.SetCID(cnrID)
 
+	//target := eacl.Target{}
+	//target.SetRole(eacl.RoleUnknown)
+	//target.SetBinaryKeys([][]byte{gA.PublicKey().Bytes()})
+
+	var records []*eacl.Record
+	//allow
+	for op := eacl.OperationGet; op <= eacl.OperationRangeHash; op++ {
+		record := eacl.NewRecord()
+		record.SetOperation(op)
+		record.SetAction(eacl.ActionAllow)
+		equal := eacl.MatchStringEqual
+		equal.DecodeString(cnrID.String())
+		record.AddObjectContainerIDFilter(equal, cnrID)
+		//record.SetTargets(target)
+		//issue the bearer to the gate not yourself!
+		eacl.AddFormedTarget(record, eacl.RoleUnknown, gA.PrivateKey().PrivateKey.PublicKey)
+		records = append(records, record)
+	}
+	//deny
+	for op := eacl.OperationGet; op <= eacl.OperationRangeHash; op++ {
+		record := eacl.NewRecord()
+		record.SetOperation(op)
+		record.SetAction(eacl.ActionDeny)
+		equal := eacl.MatchStringEqual
+		equal.DecodeString(cnrID.String())
+		record.AddObjectContainerIDFilter(equal, cnrID)
+
+		eacl.AddFormedTarget(record, eacl.RoleOthers)
+		records = append(records, record)
+	}
+	for _, r := range records {
+		tab.AddRecord(r)
+	}
+	bearerToken.SetEACLTable(tab)
+	marshaled := bearerToken.Marshal()
+	fmt.Println("created marshaled ", string(marshaled))
 	return bearerToken, nil
 }

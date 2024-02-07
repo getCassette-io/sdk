@@ -92,7 +92,7 @@ func TestRawWalletSigning(t *testing.T) {
 	//create an emitter for notifications
 	notifyEmitter := notification.MockNotificationEvent{Name: "notification events:", DB: db}
 	//create a notification manager
-	n := notification.NewMockNotifier(wg, notifyEmitter, ctx, cancelFunc)
+	n := notification.NewNotificationManager(wg, notifyEmitter, ctx, cancelFunc)
 	ephemeralAccount, err := wal.NewAccount()
 	if err != nil {
 		t.Fatal("could not create account ", err)
@@ -359,7 +359,7 @@ func TestWalletConnectSigning(t *testing.T) {
 	//create an emitter for notifications
 	notifyEmitter := notification.MockNotificationEvent{Name: "notification events:", DB: db}
 	//create a notification manager
-	n := notification.NewMockNotifier(wg, notifyEmitter, ctx, cancelFunc)
+	n := notification.NewNotificationManager(wg, notifyEmitter, ctx, cancelFunc)
 	ephemeralAccount, err := wal.NewAccount()
 	if err != nil {
 		t.Fatal("could not create account ", err)

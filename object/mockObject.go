@@ -114,7 +114,7 @@ func (o *MockObject) Head(wg *waitgroup.WG, ctx context.Context, p payload.Param
 		}
 		params, ok := p.(*ObjectParameter)
 		if !ok {
-			err := params.ObjectEmitter.Emit(params.ctx, emitter.ObjectFailed, "no parameters")
+			err := params.ObjectEmitter.Emit(ctx, emitter.ObjectFailed, "no parameters")
 			if err != nil {
 				return
 			}
@@ -268,7 +268,7 @@ func (o *MockObject) List(wg *waitgroup.WG, ctx context.Context, p payload.Param
 			default:
 				//emitting faker object
 				//this is not representative of the object.go list method.
-				err := params.ObjectEmitter.Emit(params.ctx, emitter.ObjectAddUpdate, p)
+				err := params.ObjectEmitter.Emit(ctx, emitter.ObjectAddUpdate, p)
 				if err != nil {
 					fmt.Println("error emitting new object ", p)
 					return

@@ -2,6 +2,7 @@ package notification
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/configwizard/sdk/emitter"
 	"github.com/configwizard/sdk/utils"
@@ -11,6 +12,29 @@ import (
 	"log"
 	"time"
 )
+
+type UIProgressEvent struct {
+	name         string
+	progressChan chan ProgressMessage
+}
+
+func NewUIProgressEvent(name string, progressChan chan ProgressMessage) UIProgressEvent {
+	return UIProgressEvent{
+		name:         name,
+		progressChan: progressChan,
+	}
+}
+func (m UIProgressEvent) Emit(c context.Context, message emitter.EventMessage, p any) error {
+	if pyld, ok := p.(ProgressMessage); ok {
+		//fmt.Printf("UIProgress - Progress [%s]: %d%%, Written: %d bytes\n", pyld.Title, pyld.Progress, pyld.BytesWritten)
+		fmt.Println("update from ", pyld.Title)
+		m.progressChan <- ProgressMessage{Title: pyld.Title, Progress: pyld.Progress}
+
+	} else {
+		return errors.New(utils.ErrorNotPayload)
+	}
+	return nil
+}
 
 type ProgressMessage struct {
 	Title        string

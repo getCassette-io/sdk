@@ -10,6 +10,7 @@ import (
 	"github.com/configwizard/sdk/container"
 	"github.com/configwizard/sdk/controller"
 	"github.com/configwizard/sdk/emitter"
+	"github.com/configwizard/sdk/notification"
 	obj "github.com/configwizard/sdk/object"
 	"github.com/configwizard/sdk/readwriter"
 	"github.com/configwizard/sdk/tui/views"
@@ -234,7 +235,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						var rows []table.Row
 						var containerHeadings = []table.Column{
 							{Title: "ID", Width: 10},
-							{Title: "Container Name", Width: 10},
+							{Title: "ContainerCaller Name", Width: 10},
 							//{Title: "Hash", Width: 10},
 							{Title: "Size", Width: 10},
 						}
@@ -548,9 +549,9 @@ func main() {
 	l.SetFilteringEnabled(false)
 
 	//progress channel first
-	progressChan := make(chan ProgressMessage)
+	progressChan := make(chan notification.ProgressMessage)
 
-	pEmitter := NewUIProgressEvent("progress channel", progressChan)
+	pEmitter := notification.NewUIProgressEvent("progress channel", progressChan)
 	c, err := controller.NewMockController(pEmitter, utils.MainNet, logger)
 	if err != nil {
 		log.Fatal(err)

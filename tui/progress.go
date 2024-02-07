@@ -1,41 +1,9 @@
 package main
 
 import (
-	"context"
-	"errors"
 	"fmt"
-	"github.com/configwizard/sdk/notification"
-	"github.com/configwizard/sdk/utils"
 	"time"
 )
-
-type ProgressMessage struct {
-	Title    string
-	Progress int
-}
-
-type UIProgressEvent struct {
-	name         string
-	progressChan chan ProgressMessage
-}
-
-func NewUIProgressEvent(name string, progressChan chan ProgressMessage) UIProgressEvent {
-	return UIProgressEvent{
-		name:         name,
-		progressChan: progressChan,
-	}
-}
-func (m UIProgressEvent) Emit(c context.Context, message string, p any) error {
-	if pyld, ok := p.(notification.ProgressMessage); ok {
-		//fmt.Printf("UIProgress - Progress [%s]: %d%%, Written: %d bytes\n", pyld.Title, pyld.Progress, pyld.BytesWritten)
-		fmt.Println("update from ", pyld.Title)
-		m.progressChan <- ProgressMessage{Title: pyld.Title, Progress: pyld.Progress}
-
-	} else {
-		return errors.New(utils.ErrorNotPayload)
-	}
-	return nil
-}
 
 type ProgressBar interface {
 	// Increment the progress by a given amount

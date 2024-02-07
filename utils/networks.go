@@ -43,6 +43,12 @@ func NewNetworkSelector(nodes []config.Peer) NodeSelection {
 func RetrieveStoragePeers(n Network) []config.Peer {
 	return maps.Values(networks[n].StorageNodes)
 }
+func RetrieveRPCNodes(n Network) []string {
+	return networks[n].RpcNodes
+}
+func RetrieveNetworkFileSystemAddress(n Network) string {
+	return networks[n].Address
+}
 
 var networks = map[Network]NetworkData{
 	"mainnet": {

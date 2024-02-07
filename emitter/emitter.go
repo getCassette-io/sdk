@@ -6,40 +6,63 @@ import (
 	"fmt"
 	"github.com/configwizard/sdk/payload"
 	"github.com/configwizard/sdk/utils"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 type EventMessage string
 
 const (
-	RequestSign           EventMessage = "request_sign_payload"
-	ContainerListUpdate                = "container_list_update"
-	ContainerAddUpdate                 = "container_add_update"
-	ContainerRemoveUpdate              = "container_remove_update"
-	ObjectAddUpdate                    = "object_add_update"
-	ObjectRemoveUpdate                 = "object_remove_update"
-	ObjectFailed                       = "object_failed"
-	NotificationMessage                = "notification_message"
-	ProgressMessage                    = "progress_message"
+	SetAccount                EventMessage = "set_user_account"
+	BalanceUpdate             EventMessage = "balance_update"
+	BalanceError              EventMessage = "balance_error"
+	RequestTransaction        EventMessage = "request_transaction"
+	RequestSign               EventMessage = "request_sign_payload"
+	ResponseSign              EventMessage = "response_sign_payload"
+	RequestAuthenticate       EventMessage = "request_authenticate"
+	ContainerListUpdate       EventMessage = "container_list_update"
+	ContainerAddUpdate        EventMessage = "container_add_update"
+	ContainerRemoveUpdate     EventMessage = "container_remove_update"
+	ObjectAddUpdate           EventMessage = "object_add_update"
+	ObjectRemoveUpdate        EventMessage = "object_remove_update"
+	ObjectFailed              EventMessage = "object_failed"
+	ContactAddUpdate          EventMessage = "contact_add_update"
+	ContactRemoveUpdate       EventMessage = "contact_remote_update"
+	NotificationAddMessage    EventMessage = "notification_add_message"
+	NotificationRemoveMessage EventMessage = "notification_remove_message"
+	ProgressMessage           EventMessage = "progress_message"
 )
 
+var AllEventMessages = []struct {
+	Value  EventMessage
+	TSName string
+}{
+	{SetAccount, "SetAccount"}, //some stuff around this to retrieve balances etc is necessary
+	{BalanceUpdate, "BalanceUpdate"},
+	{BalanceError, "BalanceError"},
+	{RequestTransaction, "RequestTransaction"},
+	{RequestSign, "RequestSign"},
+	{ResponseSign, "ResponseSign"},
+	{RequestAuthenticate, "RequestAuthenticate"},
+	{ContainerListUpdate, "ContainerListUpdate"},
+	{ContainerAddUpdate, "ContainerAddUpdate"},
+	{ContainerRemoveUpdate, "ContainerRemoveUpdate"},
+	{ObjectAddUpdate, "ObjectAddUpdate"},
+	{ObjectRemoveUpdate, "ObjectRemoveUpdate"},
+	{ObjectFailed, "ObjectFailed"},
+	{ContactAddUpdate, "ContactAddUpdate"},
+	{ContactRemoveUpdate, "ContactRemoveUpdate"},
+	{NotificationAddMessage, "NotificationAddMessage"},
+	{NotificationRemoveMessage, "NotificationRemoveMessage"},
+	{ProgressMessage, "ProgressMessage"},
+}
+
 type Emitter interface {
-	Emit(c context.Context, message string, payload any) error
+	Emit(c context.Context, message EventMessage, payload any) error
 }
 
 type MockObjectEvent struct{}
 
 func (e MockObjectEvent) Emit(c context.Context, message string, payload any) error {
 	fmt.Printf("mock-emit - %s - %+v\r\n", message, payload)
-	return nil
-}
-
-// fixme - this should not be part of SDK (i.e wails should not be here)
-type Event struct{}
-
-func (e Event) Emit(c context.Context, message string, payload any) error {
-	//runtime.EventsEmit(c, (string)(SignRequest), payload)
-	runtime.EventsEmit(c, message, payload)
 	return nil
 }
 
@@ -50,7 +73,7 @@ type MockWalletConnectEmitter struct {
 	SignResponse Signresponse //this is a hack while we mock. In reality the frontend calls this function
 }
 
-func (m MockWalletConnectEmitter) Emit(c context.Context, message string, p any) error {
+func (m MockWalletConnectEmitter) Emit(c context.Context, message EventMessage, p any) error {
 	//fmt.Printf("%s emitting %s - %+v\r\n", m.Name, message, p)
 	actualPayload, ok := p.(payload.Payload)
 	if !ok {

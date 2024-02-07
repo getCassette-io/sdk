@@ -9,6 +9,7 @@ import (
 	"github.com/configwizard/sdk/emitter"
 	"github.com/configwizard/sdk/utils"
 	"log"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -16,6 +17,8 @@ import (
 /*
 for mocker we need an emitter
 */
+
+type Generator func() string
 
 type MockNotificationEvent struct {
 	Name                      string
@@ -29,7 +32,7 @@ func NewMockNotificationEvent(name string, db database.Store) MockNotificationEv
 		DB:   db,
 	}
 }
-func (m MockNotificationEvent) Emit(c context.Context, _ string, p any) error {
+func (m MockNotificationEvent) Emit(c context.Context, _ emitter.EventMessage, p any) error {
 	log.Println("emitting ", p)
 	actualPayload, ok := p.(NewNotification)
 	if !ok {
@@ -68,57 +71,62 @@ const (
 
 type Notifier interface {
 	Notification(title, description, typz string, action NotificationType) NewNotification //creates a new notifier
-	GenerateIdentifier() string                                                            //generates an identifier fro the notification
-	QueueNotification(notification NewNotification)                                        //pushes a notification onto a sending queue
+	//GenerateIdentifier() string                                                            //generates an identifier fro the notification
+	//SetContext(ctx context.Context)
+	QueueNotification(notification NewNotification) //pushes a notification onto a sending queue
 	ListenAndEmit()
 	End() //listens for notifications and sends them out
 }
 type NewNotification struct {
-	Id          string
-	User        string //who is this message for so we can store it in the database
-	Title       string
-	Type        string
-	Action      NotificationType
-	Description string
-	Meta        map[string]string
-	CreatedAt   string
-	MarkRead    bool
+	Id          string            `json:"id"`
+	User        string            `json:"-"` //who is this message for so we can store it in the database
+	Title       string            `json:"title"`
+	Type        string            `json:"type"`
+	Action      NotificationType  `json:"action"`
+	Description string            `json:"description"`
+	Meta        map[string]string `json:"meta"`
+	CreatedAt   string            `json:"createdAt"`
+	MarkRead    bool              `json:"markRead"`
 }
 
 type EmitNotifier struct { //used to emit messages over a provided emitter
 	emitter.Emitter
 }
 
-type MockNotifier struct {
+type NotificationManager struct {
 	emitter.Emitter
 	DB             database.Store
 	notificationCh chan NewNotification
 	ctx            context.Context //to cancel the routine
 	cancelFunc     context.CancelFunc
 	wg             *sync.WaitGroup
+	IDGenerator    Generator
 }
 
-func NewMockNotifier(wg *sync.WaitGroup, emit emitter.Emitter, ctx context.Context, cancelFunc context.CancelFunc) MockNotifier {
+func NewNotificationManager(wg *sync.WaitGroup, emit emitter.Emitter, ctx context.Context, generator Generator) NotificationManager {
 	notificationCh := make(chan NewNotification) // Set bufferSize to a value greater than 0
-	return MockNotifier{
+	return NotificationManager{
 		Emitter:        emit,
 		notificationCh: notificationCh,
 		ctx:            ctx,
-		cancelFunc:     cancelFunc,
-		wg:             wg,
+		//cancelFunc:     cancelFunc,
+		wg:          wg,
+		IDGenerator: generator,
 	}
 }
 
-func (m MockNotifier) GenerateIdentifier() string {
-	//newUUID, _ := uuid.NewUUID()
-	return "mock-notifier-94d9a4c7-9999-4055-a549-f51383edfe57"
-}
-func (m MockNotifier) End() {
+//
+//func (m *NotificationManager) SetContext(ctx context.Context) {
+//	m.ctx = ctx
+//}
+
+func (m NotificationManager) End() {
 	m.cancelFunc()
 	defer close(m.notificationCh)
 }
-func (m MockNotifier) Notification(title, description, typez string, action NotificationType) NewNotification {
-	identifier := m.GenerateIdentifier()
+func (m NotificationManager) Notification(title, description, typez string, action NotificationType) NewNotification {
+	identifier := m.IDGenerator()
+	fmt.Println("notification identifier ", identifier)
 	return NewNotification{
 		Id:          identifier,
 		Title:       title,
@@ -127,14 +135,15 @@ func (m MockNotifier) Notification(title, description, typez string, action Noti
 		Action:      action,
 	}
 }
-func (m MockNotifier) QueueNotification(notification NewNotification) {
+func (m NotificationManager) QueueNotification(notification NewNotification) {
+	notification.CreatedAt = strconv.FormatInt(time.Now().Unix(), 10)
 	fmt.Println("pushing notification ", notification)
 	fmt.Printf("Queueing notification: %v, channel len: %d, cap: %d\n", notification, len(m.notificationCh), cap(m.notificationCh))
 	m.notificationCh <- notification
 	fmt.Println("notification pushed ", notification)
 }
 
-func (m MockNotifier) ListenAndEmit() {
+func (m NotificationManager) ListenAndEmit() {
 	fmt.Println("ListenAndEmit routine started")
 	m.wg.Add(1)
 	go func() {
@@ -153,17 +162,14 @@ func (m MockNotifier) ListenAndEmit() {
 					return
 				}
 				fmt.Println("Notification received: ", not)
-				if err := m.Emit(m.ctx, emitter.NotificationMessage, not); err != nil {
+				if err := m.Emit(m.ctx, emitter.NotificationAddMessage, not); err != nil {
 					fmt.Println("Error in Emit: ", err)
 					return
 				}
+				//a notification flag should decide whether this goes to the database
 
 			case <-ticker.C:
 				fmt.Println("ListenAndEmit is still running")
-
-			case <-m.ctx.Done():
-				fmt.Println("Context cancelled, exiting ListenAndEmit")
-				return
 			}
 		}
 	}()
