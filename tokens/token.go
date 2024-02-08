@@ -431,7 +431,9 @@ func (t WalletConnectTokenManager) NewSessionToken(lIat, lNbf, lExp uint64, cnrI
 	sessionToken.SetIat(lIat)
 	sessionToken.SetNbf(lNbf)
 	sessionToken.SetExp(lExp)
-	sessionToken.ApplyOnlyTo(cnrID)
+	if cnrID.String() != "" { //this could be dangerous. Too easy to create an open session delete token
+		sessionToken.ApplyOnlyTo(cnrID)
+	}
 
 	var issuer user.ID
 	fmt.Println("WC sessioin token from key ", t.W.PublicKey().String())

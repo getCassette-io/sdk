@@ -496,11 +496,12 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 							notification.Error,
 							notification.ActionNotification))
 					}
-					fmt.Println("WE RECEIVED SUCCESS!")
+					fmt.Println("WE RECEIVED [container] SUCCESS!")
+					c.logger.Println("3 closing everything down")
+					cancelCtx()
 				}
 				c.Notifier.QueueNotification(not)
-				c.logger.Println("3 closing everything down")
-				cancelCtx()
+
 			}
 		}
 	}()
@@ -594,6 +595,7 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 	var token tokens.Token
 	if containerParameters.Session {
 		//fixme - can verb become an operation and we instead use p.Operation()?
+		//cnrId is meangingless here no?
 		token, err = c.TokenManager.NewSessionToken(iAt, iAt, exp, cnrId, containerParameters.Verb, keys.PublicKey(pubKey)) //mock this out for different wallet types
 		if err != nil {
 			return err
@@ -733,10 +735,11 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 							notification.ActionNotification))
 					}
 					fmt.Println("WE RECEIVED [OBJECT] SUCCESS!")
+					c.logger.Println("3 closing everything down")
+					cancelCtx()
 				}
 				c.Notifier.QueueNotification(not)
-				c.logger.Println("3 closing everything down")
-				cancelCtx()
+
 			}
 		}
 	}()
@@ -929,13 +932,19 @@ func (c *Controller) InitGasTransfer(recipientAddress string, amount float64) (p
 	if err != nil {
 		return payload.Payload{}, fmt.Errorf("invalid/unsupported public key format from WalletConnect: %w", err)
 	}
+
+	fmt.Println("public key being used for transaction - ", c.Account().PublicKeyHexString())
 	//fixme - the websocket should be part of the network data
 	//fixme - why are we recreating the wallet here from public key when the controller has the wallet? test both.
 	//however its this or cast the c.Account back to a wallet.Account...
-	unsignedTransaction, err := wallet.CreateWCTransaction(wallet.NewAccountFromPublicKey((ecdsa.PublicKey)(pubKey)), wallet.RPC_WEBSOCKET, recipientAddress, amount)
+	unsignedTransaction, _, err := wallet.CreateWCTransaction(wallet.NewAccountFromPublicKey((ecdsa.PublicKey)(pubKey)), wallet.RPC_WEBSOCKET, recipientAddress, amount)
+	jsonTransaction, err := unsignedTransaction.MarshalJSON()
+	if err != nil {
+		return payload.Payload{}, err
+	}
 	p := payload.Payload{
-		OutgoingData: unsignedTransaction.Hash().BytesBE(),
-		MetaData:     unsignedTransaction.Bytes(),
+		OutgoingData: jsonTransaction,             //sign this.
+		MetaData:     unsignedTransaction.Bytes(), //use this to recraft the transaction when you have the signature
 	}
 	return p, err
 }
@@ -946,6 +955,7 @@ func (c *Controller) ConcludeTransaction(transactionData, signedData []byte) (st
 	if err != nil {
 		return "", fmt.Errorf("decode HEX public key from WalletConnect: %w", err)
 	}
+	fmt.Println("public key concluding transaction - ", c.Account().PublicKeyHexString())
 
 	var pubKey neofsecdsa.PublicKeyWalletConnect
 
@@ -953,6 +963,7 @@ func (c *Controller) ConcludeTransaction(transactionData, signedData []byte) (st
 	if err != nil {
 		return "", fmt.Errorf("invalid/unsupported public key format from WalletConnect: %w", err)
 	}
+
 	txId, err := wallet.SubmitWCTransaction(wallet.NewAccountFromPublicKey((ecdsa.PublicKey)(pubKey)), wallet.RPC_WEBSOCKET, transactionData, signedData)
 	if err != nil {
 		return "", err

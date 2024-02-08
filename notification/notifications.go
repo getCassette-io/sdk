@@ -67,6 +67,7 @@ const (
 	Info           = "info"
 	Warning        = "warning"
 	Error          = "error"
+	Spinner        = "spinner"
 )
 
 type Notifier interface {

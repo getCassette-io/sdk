@@ -10,7 +10,6 @@ import (
 	"github.com/configwizard/sdk/emitter"
 	"github.com/configwizard/sdk/notification"
 	object2 "github.com/configwizard/sdk/object"
-	"github.com/configwizard/sdk/payload"
 	"github.com/configwizard/sdk/tokens"
 	"github.com/configwizard/sdk/utils"
 	"github.com/configwizard/sdk/waitgroup"
@@ -28,7 +27,6 @@ import (
 	"github.com/nspcc-dev/neofs-sdk-go/session"
 	"github.com/nspcc-dev/neofs-sdk-go/user"
 	"github.com/nspcc-dev/neofs-sdk-go/waiter"
-	"log"
 	"strconv"
 	"time"
 )
@@ -131,18 +129,63 @@ type ContainerCaller struct {
 	database.Store
 }
 
-func connectToNeoFS(endpoint string) (*client.Client, error) {
-	neoFSClient, err := client.New(client.PrmInit{})
-	if err != nil {
-		return nil, err
+func (o *ContainerCaller) Delete(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error {
+	tok, ok := token.(*tokens.ContainerSessionToken)
+	if !ok {
+		return errors.New(utils.ErrorNoToken)
 	}
-	var dialPrm client.PrmDial
-	dialPrm.SetServerURI(endpoint)
+	var cnrId cid.ID
+	fmt.Println("decoding ", p.Id)
+	if err := cnrId.DecodeString(p.Id); err != nil {
+		actionChan <- o.Notification(
+			"failed to decode container Id",
+			err.Error(),
+			notification.Error,
+			notification.ActionNotification)
+		return err
+	}
+	deleter := client.PrmContainerDelete{}
+	deleter.WithinSession(*tok.SessionToken)
+	sdkCli, err := p.Pl.RawClient()
+	if err != nil {
+		return err
+	}
+	gateSigner := user.NewAutoIDSignerRFC6979(p.GateAccount.PrivateKey().PrivateKey) //fix me is this correct signer?
 
-	err = neoFSClient.Dial(dialPrm)
-	return neoFSClient, err
+	wait := waiter.NewContainerDeleteWaiter(sdkCli, waiter.DefaultPollInterval)
+	ctx, _ = context.WithTimeout(p.Ctx, 60*time.Second)
+	//defer cancel()
+	actionChan <- o.Notification(
+		"deleting container",
+		"deleting container "+p.Id,
+		notification.Spinner,
+		notification.ActionNotification)
+	if err := wait.ContainerDelete(ctx, cnrId, gateSigner, deleter); err != nil {
+		actionChan <- o.Notification(
+			"failed to delete container",
+			err.Error(),
+			notification.Error,
+			notification.ActionNotification)
+		return err
+	}
+	localContainer := Container{
+		Id: p.Id,
+	}
+	if err := p.ContainerEmitter.Emit(ctx, emitter.ContainerRemoveUpdate, localContainer); err != nil {
+		actionChan <- o.Notification(
+			"failed to emit update",
+			err.Error(),
+			notification.Error,
+			notification.ActionNotification)
+		return err
+	}
+	actionChan <- o.Notification(
+		"container deleted",
+		p.Id,
+		notification.Success,
+		notification.ActionNotification)
+	return nil
 }
-
 func (o *ContainerCaller) Create(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error {
 	tok, ok := token.(*tokens.ContainerSessionToken)
 	if !ok {
@@ -191,21 +234,21 @@ func (o *ContainerCaller) Create(wg *waitgroup.WG, ctx context.Context, p Contai
 		return err
 	}
 	gateSigner := user.NewAutoIDSignerRFC6979(p.GateAccount.PrivateKey().PrivateKey) //fix me is this correct signer?
-	//sdkCli, err := p.Pl.RawClient()
-	//if err != nil {
-	//	fmt.Println("error raw client ", err)
-	//	return err //handle this error
-	//}
-	cli, err := connectToNeoFS("grpcs://st4.storage.fs.neo.org:8082")
+	sdkCli, err := p.Pl.RawClient()
 	if err != nil {
 		return err
 	}
 	cnrJson, _ := cnr.MarshalJSON()
 	fmt.Printf("owner %+v - cnrJson %+v\r\n", cnr.Owner(), string(cnrJson))
-	wait := waiter.NewContainerPutWaiter(cli, waiter.DefaultPollInterval)
+	wait := waiter.NewContainerPutWaiter(sdkCli, waiter.DefaultPollInterval)
 	ctx, cancel := context.WithTimeout(p.Ctx, 120*time.Second)
 	defer cancel()
 	fmt.Println("about to begin container put")
+	actionChan <- o.Notification(
+		"creating container",
+		"creating container "+p.Name(),
+		notification.Spinner,
+		notification.ActionNotification)
 	idCnr, err := wait.ContainerPut(ctx, cnr, gateSigner, putter)
 	fmt.Println("id ", idCnr, "err ", err)
 	if err != nil {
@@ -235,8 +278,8 @@ func (o *ContainerCaller) Create(wg *waitgroup.WG, ctx context.Context, p Contai
 		return err
 	}
 	actionChan <- o.Notification(
-		"container created",
-		"container "+idCnr.String()+" created",
+		"container "+p.Name()+" created",
+		idCnr.String(),
 		notification.Success,
 		notification.ActionNotification)
 	return nil
@@ -310,7 +353,6 @@ func (o *ContainerCaller) List(wg *waitgroup.WG, ctx context.Context, p Containe
 			notification.ActionNotification)
 		return err
 	}
-	log.Printf("%v\r\n", r)
 	//we need to now emit this list one at a time as we receive them (or as one array?)
 	for _, v := range r { //we can manage this synchronously i believe.
 		fmt.Printf("emitting here %+v\r\n", v.String())
@@ -323,15 +365,6 @@ func (o *ContainerCaller) List(wg *waitgroup.WG, ctx context.Context, p Containe
 				notification.Error,
 				notification.ActionNotification)
 		}
-		////put this on a channel?
-		//if metaError := o.Head(wg, ctx, p, actionChan, token); metaError != nil {
-		//	actionChan <- o.Notification(
-		//		"failed to retrieve metadata for"+v.String(),
-		//		"could not list containers "+err.Error(),
-		//		notification.Error,
-		//		notification.ActionNotification)
-		//	continue
-		//}
 		time.Sleep(100 * time.Millisecond)
 	}
 	actionChan <- o.Notification(
@@ -339,69 +372,9 @@ func (o *ContainerCaller) List(wg *waitgroup.WG, ctx context.Context, p Containe
 		"container list retrieved",
 		notification.Success,
 		notification.ActionToast)
-	//wgMessage := "containerList"
-	//wg.Add(1, wgMessage)
-	//go func() {
-	//	defer func() {
-	//		wg.Done(wgMessage)
-	//		fmt.Println("[container] List action completed")
-	//	}()
-	//	fmt.Println("user id....", p.PublicKey)
-	//	userID := user.ResolveFromECDSAPublicKey(p.PublicKey)
-	//	fmt.Println("user id is....", userID)
-	//	lst := client.PrmContainerList{}
-	//	lst.WithXHeaders() //fixme - discover what this is for
-	//	var exit bool
-	//	for {
-	//		select {
-	//		case <-ctx.Done():
-	//			fmt.Println("mock head exited")
-	//			return
-	//		default:
-	//			fmt.Println("getting list with ", lst)
-	//			r, err := p.Pl.ContainerList(ctx, userID, lst)
-	//			if err != nil {
-	//				actionChan <- o.Notification(
-	//					"failed to list containers",
-	//					"could not list containers "+err.Error(),
-	//					notification.Error,
-	//					notification.ActionNotification)
-	//				return
-	//			}
-	//			log.Printf("%v\r\n", r)
-	//			//we need to now emit this list one at a time as we receive them (or as one array?)
-	//			for _, v := range r {
-	//				fmt.Printf("emitting %+v\r\n", v)
-	//				err := p.ContainerEmitter.Emit(p.ctx, emitter.ContainerListUpdate, v)
-	//				if err != nil {
-	//					fmt.Println("error emitting new object ", p)
-	//					actionChan <- o.Notification(
-	//						"failed to list containers",
-	//						"could not list containers "+err.Error(),
-	//						notification.Error,
-	//						notification.ActionNotification)
-	//				}
-	//				time.Sleep(100 * time.Millisecond)
-	//			}
-	//			exit = true
-	//			break
-	//		}
-	//		if exit {
-	//			actionChan <- o.Notification(
-	//				"list complete!",
-	//				"object "+o.Id+" completed",
-	//				notification.Success,
-	//				notification.ActionNotification)
-	//			return
-	//		}
-	//	}
-	//}()
 	return nil
 }
 
-func (o *ContainerCaller) Delete(p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) (notification.NewNotification, error) {
-	return notification.NewNotification{}, nil
-}
 func (o *ContainerCaller) Read(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error {
 
 	tok, ok := token.(*tokens.BearerToken)

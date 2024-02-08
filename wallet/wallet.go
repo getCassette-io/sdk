@@ -3,6 +3,7 @@ package wallet
 import (
 	"context"
 	"crypto/ecdsa"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"github.com/configwizard/sdk/utils"
@@ -121,7 +122,7 @@ type Nep17Token struct {
 
 // decrypted account
 // fixme if we know the public key and not the recipient string....
-func CreateWCTransaction(acc *wallet.Account /* RPC_WEBSOCKET */, websocket RPC_NETWORK, recipient string, amount float64) (*transaction.Transaction, error) {
+func CreateWCTransaction(acc *wallet.Account /* RPC_WEBSOCKET */, websocket RPC_NETWORK, recipient string, amount float64) (*transaction.Transaction, util.Uint256, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	wsC, err := client.NewWS(ctx, string(websocket), client.WSOptions{ //fixme - create one client for all. (not strictly necessary but we don't necessarily want to leave SubmitTransaction open forever)
@@ -129,27 +130,41 @@ func CreateWCTransaction(acc *wallet.Account /* RPC_WEBSOCKET */, websocket RPC_
 		CloseNotificationChannelIfFull: false,
 	})
 	if err != nil {
-		return nil, err
+		return nil, util.Uint256{}, err
 	}
 	err = wsC.Init()
 	if err != nil {
-		return nil, err
+		return nil, util.Uint256{}, err
 	}
-
 	act, err := actor.NewSimple(wsC, acc)
+	if err != nil {
+		return nil, util.Uint256{}, err
+	}
 	gasAct := gas.New(act)
 	recipientHash, err := address.StringToUint160(recipient)
+	if err != nil {
+		return nil, util.Uint256{}, err
+	}
 	decimals, err := gasAct.Decimals()
+	if err != nil {
+		return nil, util.Uint256{}, err
+	}
 	gasPrecisionAmount, err := ConvertToBigInt(amount, decimals)
+	if err != nil {
+		return nil, util.Uint256{}, err
+	}
 	unsignedTransaction, err := gasAct.TransferUnsigned(acc.ScriptHash(), recipientHash, gasPrecisionAmount, nil)
-
-	/*
-		I think we will need to return the bytes and the hash so that we can rebuild it the other end.
-		that means we need to send back two things, the bytes to store and the hash to sign.
-	*/
-	return unsignedTransaction, nil //fixme
+	if err != nil {
+		return nil, util.Uint256{}, err
+	}
+	fmt.Println("HASH WHEN CRAFTING TRANSACTION ", unsignedTransaction.Hash())
+	signedData := make([]byte, 4+util.Uint256Size)
+	binary.LittleEndian.PutUint32(signedData, uint32(act.GetNetwork()))
+	h := unsignedTransaction.Hash()
+	copy(signedData[4:], h[:])
+	return unsignedTransaction, h, nil
 }
-func SubmitWCTransaction(w *wallet.Account /* RPC_WEBSOCKET */, websocket RPC_NETWORK, transactionData, signedData []byte) (string, error) {
+func SubmitWCTransaction(dw *wallet.Account /* RPC_WEBSOCKET */, websocket RPC_NETWORK, transactionData, signedData []byte) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	wsC, err := client.NewWS(ctx, string(websocket), client.WSOptions{
@@ -170,11 +185,19 @@ func SubmitWCTransaction(w *wallet.Account /* RPC_WEBSOCKET */, websocket RPC_NE
 		fmt.Println("could not create transaction from bytes ", err)
 		return "", err
 	}
-	invoc := append([]byte{byte(opcode.PUSHDATA1), keys.SignatureLen}, signedData...)
-	signingTransaction.Scripts = append(signingTransaction.Scripts, transaction.Witness{
-		VerificationScript: w.GetVerificationScript(),
-		InvocationScript:   invoc,
-	})
+	fmt.Println("HASH WHEN REBUILDING TRANSACTION ", signingTransaction.Hash())
+	//invoc := append([]byte{byte(opcode.PUSHDATA1), keys.SignatureLen}, signedData...)
+	fmt.Println("length of signedData = ", len(signedData), signedData, string(signedData))
+	if len(signingTransaction.Scripts) != 1 {
+		return "", errors.New("no scripts to attach invocation to")
+	}
+	signingTransaction.Scripts[0].InvocationScript = append([]byte{byte(opcode.PUSHDATA1), keys.SignatureLen}, signedData...)
+	fmt.Printf("invocation set")
+	marsalled, err := signingTransaction.MarshalJSON()
+	if err != nil {
+		return "", err
+	}
+	fmt.Printf("signed transaction %+v\r\n", string(marsalled))
 	txId, err := wsC.SendRawTransaction(signingTransaction)
 	if err != nil {
 		fmt.Println("send raw transaction error", err)
@@ -185,8 +208,6 @@ func SubmitWCTransaction(w *wallet.Account /* RPC_WEBSOCKET */, websocket RPC_NE
 		fmt.Println("get version error ", err)
 		return "", err
 	}
-	//thiw wait can run on a routine while it waits for the transaction to go through. We can return the txId and mark it as pending.
-	//or we can simply make this blocking until it completes and then return the txId if thats simpler.
 	aer, err := waiter.New(wsC, version).Wait(txId, signingTransaction.ValidUntilBlock, nil)
 	if err != nil {
 		fmt.Println("waiter error ", err)
