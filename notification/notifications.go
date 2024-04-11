@@ -58,7 +58,8 @@ func (m MockNotificationEvent) Emit(c context.Context, _ emitter.EventMessage, p
 type NotificationType uint8
 
 const (
-	ActionToast NotificationType = iota
+	ActionNOOP NotificationType = iota
+	ActionToast
 	ActionNotification
 	ActionClipboard
 )

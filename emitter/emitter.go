@@ -20,6 +20,7 @@ const (
 	RequestAuthenticate       EventMessage = "request_authenticate"
 	ContainerListUpdate       EventMessage = "container_list_update"
 	ContainerAddUpdate        EventMessage = "container_add_update"
+	HeadRetrieved             EventMessage = "head_retrieved" //used when not part of a larger asynchronous request
 	ContainerRemoveUpdate     EventMessage = "container_remove_update"
 	ObjectAddUpdate           EventMessage = "object_add_update"
 	ObjectRemoveUpdate        EventMessage = "object_remove_update"
@@ -44,6 +45,7 @@ var AllEventMessages = []struct {
 	{RequestAuthenticate, "RequestAuthenticate"},
 	{ContainerListUpdate, "ContainerListUpdate"},
 	{ContainerAddUpdate, "ContainerAddUpdate"},
+	{HeadRetrieved, "HeadRetrieved"},
 	{ContainerRemoveUpdate, "ContainerRemoveUpdate"},
 	{ObjectAddUpdate, "ObjectAddUpdate"},
 	{ObjectRemoveUpdate, "ObjectRemoveUpdate"},
@@ -58,10 +60,16 @@ var AllEventMessages = []struct {
 type Emitter interface {
 	Emit(c context.Context, message EventMessage, payload any) error
 }
+type MockContainerEvent struct{}
+
+func (e MockContainerEvent) Emit(c context.Context, message EventMessage, payload any) error {
+	fmt.Printf("mock-emit - %s - %+v\r\n", message, payload)
+	return nil
+}
 
 type MockObjectEvent struct{}
 
-func (e MockObjectEvent) Emit(c context.Context, message string, payload any) error {
+func (e MockObjectEvent) Emit(c context.Context, message EventMessage, payload any) error {
 	fmt.Printf("mock-emit - %s - %+v\r\n", message, payload)
 	return nil
 }
@@ -97,7 +105,7 @@ type MockRawWalletEmitter struct {
 	SignResponse Signresponse //this is a hack while we mock. In reality the frontend calls this function
 }
 
-func (m MockRawWalletEmitter) Emit(c context.Context, message string, p any) error {
+func (m MockRawWalletEmitter) Emit(c context.Context, message EventMessage, p any) error {
 	fmt.Printf("%s emitting %s - %+v\r\n", m.Name, message, p)
 	actualPayload, ok := p.(payload.Payload)
 	if !ok {

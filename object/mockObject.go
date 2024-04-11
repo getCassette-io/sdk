@@ -2,9 +2,10 @@ package object
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/bxcodec/faker/v3"
+
 	"github.com/configwizard/sdk/database"
 	"github.com/configwizard/sdk/emitter"
 	"github.com/configwizard/sdk/notification"
@@ -27,6 +28,13 @@ type MockObject struct {
 	database.Store
 }
 
+func (o *MockObject) SetNotifier(notifier notification.Notifier) {
+	o.Notifier = notifier
+}
+func (o *MockObject) SetStore(store database.Store) {
+	o.Store = store
+}
+
 // todo - this will need to handle synchronous requests to the database and then asynchronous requests to the network
 // basically load what we have but update it.
 // these will need to fire notifications and events on completion.
@@ -35,114 +43,28 @@ type MockObject struct {
 // and a message type with any new information?
 // however maybe that isn;t the jjob of this and its the hob of the controller, who interfces with the UI. so this needs a chanenl to send messages on actually
 func (o *MockObject) Head(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error {
-	buffer := make([]byte, 10)
-	wgMessage := "mock_head_" + utils.GetCurrentFunctionName()
-	wg.Add(1, wgMessage)
-	byt, err := json.Marshal(o)
-	if err != nil {
-		actionChan <- o.Notification(
-			"failed to marshal object",
-			"could not marshal object for database storage "+err.Error(),
-			notification.Error,
-			notification.ActionNotification)
-		return err
-	}
-	if err := o.Create(database.ObjectBucket, o.Id, byt); err != nil {
-		actionChan <- o.Notification(
-			"failed to store object",
-			"could not store [pending] object in database "+err.Error(),
-			notification.Error,
-			notification.ActionNotification)
-		return err
-	}
-	go func() {
-		defer func() {
-			wg.Done(wgMessage)
-			fmt.Println("HEAD action completed")
-		}()
-		var exit bool
-		for {
-			select {
-			case <-ctx.Done():
-				fmt.Println("mock head exited")
-				return
-			default:
-				n, err := p.Read(buffer)
-				if n > 0 {
-					if _, err := p.Write(buffer[:n]); err != nil {
-						actionChan <- o.Notification(
-							"failed to write to buffer",
-							"could not write object to buffer "+err.Error(),
-							notification.Error,
-							notification.ActionNotification)
-						return
-					}
-				}
-				if err != nil {
-					exit = true
-					if err == io.EOF {
-						fmt.Println("reached end of file")
-						actionChan <- o.Notification(
-							"download complete!",
-							"object "+o.Id+" completed",
-							notification.Success,
-							notification.ActionNotification)
-						break
-					}
-					fmt.Println("actual error ", err)
-					actionChan <- o.Notification(
-						"error",
-						"no more data",
-						notification.Error,
-						notification.ActionNotification)
-				}
-				//fixme - head does not need to do this. it is a block of content and should be stored, not streamed
-				time.Sleep(2 * time.Millisecond)
-			}
-			if exit {
-				break
-			}
-		}
 
-		//update the object now we have more information about it
-		if err := o.Update(database.ObjectBucket, o.Id, byt); err != nil {
-			actionChan <- o.Notification(
-				"failed to store object",
-				"could not store [pending] object in database "+err.Error(),
-				notification.Error,
-				notification.ActionNotification)
+	mockObject := Object{
+		ParentID:   p.ParentID(),
+		Id:         p.ID(),
+		Name:       fmt.Sprintf("%s.%s", faker.Word(), "txt"),
+		Attributes: make(map[string]string),
+		Size:       1025,
+		CreatedAt:  time.Now().Unix(),
+	}
+	params, ok := p.(ObjectParameter)
+	if !ok {
+		err := params.ObjectEmitter.Emit(ctx, emitter.ObjectFailed, mockObject)
+		if err != nil {
+			return err
 		}
-		params, ok := p.(*ObjectParameter)
-		if !ok {
-			err := params.ObjectEmitter.Emit(ctx, emitter.ObjectFailed, "no parameters")
-			if err != nil {
-				return
-			}
-		}
-	}()
+	}
 
-	return nil
+	return params.ObjectEmitter.Emit(ctx, emitter.ObjectAddUpdate, mockObject)
 }
 func (o *MockObject) Read(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error {
 	buffer := make([]byte, 10)
 	wgMessage := "mock_read_" + utils.GetCurrentFunctionName()
-	byt, err := json.Marshal(o)
-	if err != nil {
-		actionChan <- o.Notification(
-			"failed to marshal object",
-			"could not marshal object for database storage "+err.Error(),
-			notification.Error,
-			notification.ActionNotification)
-		return err
-	}
-	if err := o.Create(database.ObjectBucket, o.Id, byt); err != nil {
-		actionChan <- o.Notification(
-			"failed to store object",
-			"could not store [pending] object in database "+err.Error(),
-			notification.Error,
-			notification.ActionNotification)
-		return err
-	}
 	wg.Add(1, wgMessage)
 	go func() {
 		defer func() {
@@ -194,7 +116,7 @@ func (o *MockObject) Read(wg *waitgroup.WG, ctx context.Context, p payload.Param
 	}()
 	return nil
 }
-func (o *MockObject) Write(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) (notification.NewNotification, error) {
+func (o *MockObject) Create(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error {
 	buffer := make([]byte, 10)
 	wgMessage := "mock_write_" + utils.GetCurrentFunctionName()
 	wg.Add(1, wgMessage)
@@ -241,17 +163,17 @@ func (o *MockObject) Write(wg *waitgroup.WG, ctx context.Context, p payload.Para
 			}
 		}
 	}()
-	return notification.NewNotification{}, nil
+	return nil
 }
-func (o *MockObject) Delete(p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) (notification.NewNotification, error) {
-	return notification.NewNotification{}, nil
+func (o *MockObject) Delete(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error {
+	return nil
 }
-func (o *MockObject) List(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) (notification.NewNotification, error) {
+func (o *MockObject) List(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error {
 	wgMessage := "mock_list_" + utils.GetCurrentFunctionName()
 
 	params, ok := p.(*ObjectParameter)
 	if !ok {
-		return notification.NewNotification{}, errors.New("no object parameters")
+		return errors.New(utils.ErrorNotParameter)
 	}
 	wg.Add(1, wgMessage)
 	go func() {
@@ -280,5 +202,5 @@ func (o *MockObject) List(wg *waitgroup.WG, ctx context.Context, p payload.Param
 			}
 		}
 	}()
-	return notification.NewNotification{}, nil
+	return nil
 }

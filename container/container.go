@@ -15,6 +15,7 @@ import (
 	"github.com/configwizard/sdk/waitgroup"
 	"github.com/nspcc-dev/neo-go/pkg/wallet"
 	v2Container "github.com/nspcc-dev/neofs-api-go/v2/container"
+	"github.com/nspcc-dev/neofs-sdk-go/bearer"
 	"github.com/nspcc-dev/neofs-sdk-go/client"
 	"github.com/nspcc-dev/neofs-sdk-go/container"
 	"github.com/nspcc-dev/neofs-sdk-go/container/acl"
@@ -30,6 +31,16 @@ import (
 	"strconv"
 	"time"
 )
+
+type ContainerAction interface {
+	Head(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error
+	Create(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error
+	Read(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error
+	List(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error
+	Delete(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error
+	SetNotifier(notifier notification.Notifier) // Assuming NotifierType is the type for Notifier
+	SetStore(store database.Store)              // Assuming StoreType is the type for Store
+}
 
 const (
 	attributeName      = "Name"
@@ -129,6 +140,12 @@ type ContainerCaller struct {
 	database.Store
 }
 
+func (o *ContainerCaller) SetNotifier(notifier notification.Notifier) {
+	o.Notifier = notifier
+}
+func (o *ContainerCaller) SetStore(store database.Store) {
+	o.Store = store
+}
 func (o *ContainerCaller) Delete(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error {
 	tok, ok := token.(*tokens.ContainerSessionToken)
 	if !ok {
@@ -371,15 +388,22 @@ func (o *ContainerCaller) List(wg *waitgroup.WG, ctx context.Context, p Containe
 		"container list complete!",
 		"container list retrieved",
 		notification.Success,
-		notification.ActionToast)
+		notification.ActionNOOP)
 	return nil
 }
 
 func (o *ContainerCaller) Read(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error {
 
-	tok, ok := token.(*tokens.BearerToken)
-	if !ok {
-		return errors.New(utils.ErrorNoToken)
+	//var ok bool
+	var bToken *bearer.Token
+	if tok, ok := token.(*tokens.BearerToken); !ok {
+		if tok, ok := token.(*tokens.PrivateBearerToken); !ok {
+			return errors.New(utils.ErrorNoToken)
+		} else {
+			bToken = tok.BearerToken
+		}
+	} else {
+		bToken = tok.BearerToken
 	}
 	var cnrId cid.ID
 	fmt.Println("decoding ", p.Id)
@@ -404,7 +428,7 @@ func (o *ContainerCaller) Read(wg *waitgroup.WG, ctx context.Context, p Containe
 		gateSigner := user.NewAutoIDSignerRFC6979(p.GateAccount.PrivateKey().PrivateKey)
 
 		prms := client.PrmObjectSearch{}
-		prms.WithBearerToken(*tok.BearerToken) //fixme - why is this a pointer?
+		prms.WithBearerToken(*bToken) //fixme - why is this a pointer?
 
 		filter := object.SearchFilters{}
 		filter.AddRootFilter()
@@ -461,7 +485,7 @@ func (o *ContainerCaller) Read(wg *waitgroup.WG, ctx context.Context, p Containe
 			"container object list complete!",
 			"object list for "+o.Id+" finished",
 			notification.Success,
-			notification.ActionToast)
+			notification.ActionNOOP)
 		//exit = true
 		//break
 		//}

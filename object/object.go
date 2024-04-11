@@ -15,6 +15,7 @@ import (
 	"github.com/configwizard/sdk/utils"
 	"github.com/configwizard/sdk/waitgroup"
 	"github.com/nspcc-dev/neo-go/pkg/wallet"
+	"github.com/nspcc-dev/neofs-sdk-go/bearer"
 	"github.com/nspcc-dev/neofs-sdk-go/client"
 	apistatus "github.com/nspcc-dev/neofs-sdk-go/client/status"
 	cid "github.com/nspcc-dev/neofs-sdk-go/container/id"
@@ -26,12 +27,20 @@ import (
 	"github.com/nspcc-dev/neofs-sdk-go/user"
 	"io"
 	"log"
-	"path/filepath"
 	"reflect"
 	"strconv"
-	"strings"
 	"time"
 )
+
+type ObjectAction interface {
+	Head(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error
+	Create(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error
+	Read(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error
+	List(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error
+	Delete(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error
+	SetNotifier(notifier notification.Notifier) // Assuming NotifierType is the type for Notifier
+	SetStore(store database.Store)              // Assuming StoreType is the type for Store
+}
 
 const payloadChecksumHeader = "payload_checksum"
 const payloadFileType = "filetype"
@@ -115,6 +124,13 @@ type ObjectCaller struct {
 	//the location its to be read from/saved to if necessary
 }
 
+func (o *ObjectCaller) SetNotifier(notifier notification.Notifier) {
+	o.Notifier = notifier
+}
+func (o *ObjectCaller) SetStore(store database.Store) {
+	o.Store = store
+}
+
 // todo - this will need to handle synchronous requests to the database and then asynchronous requests to the network
 // basically load what we have but update it.
 // these will need to fire notifications and events on completion.
@@ -138,12 +154,15 @@ func (o *ObjectCaller) Head(wg *waitgroup.WG, ctx context.Context, p payload.Par
 		return err
 	}
 	var prmHead client.PrmObjectHead
-	fmt.Println("token provided to head ", token, token.(*tokens.BearerToken))
-	if tok, ok := token.(*tokens.BearerToken); ok {
-		//todo - this could be nil and cause an issue:
-		prmHead.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
+	//fmt.Println("token provided to head ", token, token.(*tokens.BearerToken))
+	if tok, ok := token.(*tokens.BearerToken); !ok {
+		if tok, ok := token.(*tokens.PrivateBearerToken); !ok {
+			return errors.New(utils.ErrorNoToken) //in the future we could offer a session token, but not really recommended.
+		} else {
+			prmHead.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
+		}
 	} else {
-		return errors.New("no bearer token provided") //in the future we could offer a session token, but not really recommended.
+		prmHead.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
 	}
 	fmt.Println("p ---- ", p, p.(ObjectParameter))
 	params, ok := p.(ObjectParameter)
@@ -168,33 +187,50 @@ func (o *ObjectCaller) Head(wg *waitgroup.WG, ctx context.Context, p payload.Par
 	localObject := Object{
 		ParentID:   cnrID.String(),
 		Id:         id.String(),
-		Attributes: make(map[string]string),
 		Size:       hdr.PayloadSize(),
-		CreatedAt:  time.Time{},
+		CreatedAt:  time.Time{}.Unix(),
+		Attributes: make(map[string]string),
 	}
-	for _, a := range hdr.Attributes() {
-		localObject.Attributes[a.Key()] = a.Value()
+	for _, v := range hdr.Attributes() {
+		switch v.Key() {
+		case object.AttributeTimestamp:
+			timestampInt, err := strconv.ParseInt(v.Value(), 10, 64)
+			if err != nil {
+				fmt.Println("Error converting string to int:", err)
+				return err
+			}
+			localObject.CreatedAt = timestampInt
+		case object.AttributeContentType:
+			localObject.ContentType = v.Value()
+		case object.AttributeFileName:
+			localObject.Name = v.Value()
+		case object.AttributeExpirationEpoch:
+			//nothing yet
+		case object.AttributeFilePath:
+			//nothing yet
+		}
+		localObject.Attributes[v.Key()] = v.Value()
 	}
 	checksum, _ := hdr.PayloadChecksum()
 	localObject.Attributes[payloadChecksumHeader] = checksum.String()
-	if filename, ok := localObject.Attributes[object.AttributeFileName]; ok {
-		localObject.Name = filename
-		localObject.Attributes[payloadFileType] = strings.TrimPrefix(filepath.Ext(filename), ".")
-	} else {
-		localObject.Attributes[payloadFileType] = "" //delete this an check undefined on attributes frontend?, localObject.Attributes) // = "" //breaking changer from "X_EXT"
-	}
-	if timestamp, ok := localObject.Attributes[object.AttributeTimestamp]; ok {
-		//strconv.FormatInt(time.Now().Unix(), 10)
-		i, err := strconv.ParseInt(timestamp, 10, 64)
-		if err != nil {
-			panic(err)
-		}
-		tm := time.UnixMilli(i)
-		localObject.CreatedAt = tm //might want to keep this as unix and display on frontend
-	}
-	if contentType, ok := localObject.Attributes[object.AttributeContentType]; ok {
-		localObject.ContentType = contentType
-	}
+	//if filename, ok := localObject.Attributes[object.AttributeFileName]; ok {
+	//	localObject.Name = filename
+	//	localObject.Attributes[payloadFileType] = strings.TrimPrefix(filepath.Ext(filename), ".")
+	//} else {
+	//	localObject.Attributes[payloadFileType] = "" //delete this an check undefined on attributes frontend?, localObject.Attributes) // = "" //breaking changer from "X_EXT"
+	//}
+	//if timestamp, ok := localObject.Attributes[object.AttributeTimestamp]; ok {
+	//	//strconv.FormatInt(time.Now().Unix(), 10)
+	//	i, err := strconv.ParseInt(timestamp, 10, 64)
+	//	if err != nil {
+	//		panic(err)
+	//	}
+	//	tm := time.UnixMilli(i)
+	//	localObject.CreatedAt = tm //might want to keep this as unix and display on frontend
+	//}
+	//if contentType, ok := localObject.Attributes[object.AttributeContentType]; ok {
+	//	localObject.ContentType = contentType
+	//}
 	fmt.Printf("received header object from pool %s -- %+v\r\n", reflect.TypeOf(hdr).String(), localObject)
 	//sends this wherever it needs to go. If this is needed somewhere else in the app, then a closure can allow this to be accessed elsewhere in a routine.
 	return params.ObjectEmitter.Emit(ctx, emitter.ObjectAddUpdate, localObject)
@@ -214,7 +250,7 @@ func (o *ObjectCaller) Delete(wg *waitgroup.WG, ctx context.Context, p payload.P
 	if err != nil {
 		return err
 	}
-	params, ok := p.(*ObjectParameter)
+	params, ok := p.(ObjectParameter)
 	if !ok {
 		return errors.New("no object parameters")
 	}
@@ -226,11 +262,29 @@ func (o *ObjectCaller) Delete(wg *waitgroup.WG, ctx context.Context, p payload.P
 		return errors.New("no bearer token provided")
 	}
 	gateSigner := user.NewAutoIDSignerRFC6979(gA.PrivateKey().PrivateKey)
-	if id, err := p.Pool().ObjectDelete(ctx, cnrID, objID, gateSigner, prmDelete); err != nil {
+	ctx, _ = context.WithTimeout(ctx, 60*time.Second)
+	if _, err := p.Pool().ObjectDelete(ctx, cnrID, objID, gateSigner, prmDelete); err != nil {
+		actionChan <- o.Notification(
+			"delete failed",
+			"object "+p.ID()+" failed to delete "+err.Error(),
+			notification.Success,
+			notification.ActionNotification)
 		return err
 	} else {
-		return params.ObjectEmitter.Emit(ctx, emitter.ObjectRemoveUpdate, id)
+		localObject := Object{
+			ParentID: p.ParentID(),
+			Id:       p.ID(),
+		}
+		if err := params.ObjectEmitter.Emit(ctx, emitter.ObjectRemoveUpdate, localObject); err != nil {
+			fmt.Println("could not emit update", err)
+		}
+		actionChan <- o.Notification(
+			"delete complete",
+			"object "+p.ID()+" deleted",
+			notification.Success,
+			notification.ActionNotification)
 	}
+	return nil
 }
 
 func (o *ObjectCaller) List(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error {
@@ -290,13 +344,15 @@ func InitReader(ctx context.Context, params ObjectParameter, token tokens.Token)
 	}
 	gateSigner := user.NewAutoIDSigner(gA.PrivateKey().PrivateKey) //fix me is this correct signer?
 	getInit := client.PrmObjectGet{}
-	if tok, ok := token.(*tokens.BearerToken); ok {
-		//todo - this could be nil and cause an issue:
-		getInit.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
+	if tok, ok := token.(*tokens.BearerToken); !ok {
+		if tok, ok := token.(*tokens.PrivateBearerToken); !ok {
+			return object.Object{}, nil, errors.New("no bearer token provided")
+		} else {
+			getInit.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
+		}
 	} else {
-		return object.Object{}, nil, errors.New("no bearer token provided")
+		getInit.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
 	}
-
 	dstObject, objReader, err := params.Pool().ObjectGetInit(ctx, cnrID, objID, gateSigner, getInit)
 	if err != nil {
 		log.Println("error creating object reader ", err)
@@ -375,16 +431,19 @@ func InitWriter(ctx context.Context, p *ObjectParameter, token tokens.Token) (io
 	var opts slicer.Options
 	opts.SetObjectPayloadLimit(ni.MaxObjectSize())
 	opts.SetCurrentNeoFSEpoch(ni.CurrentEpoch())
-	if tok, ok := token.(*tokens.BearerToken); ok {
-		//todo - this could be nil and cause an issue:
-		if !tok.BearerToken.VerifySignature() {
-			fmt.Println("ERROR Signature not verified!!!")
-			return nil, errors.New("TOKEN IS NOT VERIFIED!!!!")
+
+	var bearerToken *bearer.Token
+	if tok, ok := token.(*tokens.BearerToken); !ok {
+		if tok, ok := token.(*tokens.PrivateBearerToken); !ok {
+			return nil, errors.New("no bearer token provided")
+		} else {
+			bearerToken = tok.BearerToken
 		}
-		opts.SetBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
 	} else {
-		return nil, errors.New("no bearer token provided")
+		bearerToken = tok.BearerToken
 	}
+	opts.SetBearerToken(*bearerToken) //now we know its a bearer token we can extract it
+
 	if !ni.HomomorphicHashingDisabled() {
 		opts.CalculateHomomorphicChecksum()
 	}
@@ -393,17 +452,30 @@ func InitWriter(ctx context.Context, p *ObjectParameter, token tokens.Token) (io
 	hdr.SetType(object.TypeRegular)
 	hdr.SetOwnerID(&userID)
 	hdr.SetCreationEpoch(ni.CurrentEpoch())
+	fmt.Println("configuring header for new object ", p.Attrs)
+
+	//var fileNameAttr object.Attribute
+	//fileNameAttr.SetKey(object.AttributeFileName)
+	//fileNameAttr.SetValue(fileStats.Name())
+	//p.Attrs = append(p.Attrs, fileNameAttr)
+
+	var timestampAttr object.Attribute
+	timestampAttr.SetKey(object.AttributeTimestamp)
+	timestampAttr.SetValue(strconv.FormatInt(time.Now().Unix(), 10))
+	p.Attrs = append(p.Attrs, timestampAttr)
+
+	hdr.SetAttributes(p.Attrs...)
 	plWriter, err := slicer.InitPut(ctx, sdkCli, hdr, gateSigner, opts)
 	if err != nil {
 		fmt.Println("error creating putter ", err)
 		return nil, err
 	}
-	//p.Id = plWriter.ID().String() //store this back on the object so we can access it later.
 	p.WriteCloser = plWriter
 	return plWriter, err
 }
 
-func (o ObjectCaller) Write(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error {
+func (o ObjectCaller) Create(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error {
+	fmt.Println("beginning to write object")
 	objectParameters, ok := p.(ObjectParameter)
 	if ok {
 		var err error
@@ -418,6 +490,7 @@ func (o ObjectCaller) Write(wg *waitgroup.WG, ctx context.Context, p payload.Par
 		}
 	}
 
+	fmt.Println("writing init completed, beginning data transfer")
 	buf := make([]byte, 1024)
 	for {
 		n, err := p.Read(buf)
@@ -445,41 +518,62 @@ func (o ObjectCaller) Write(wg *waitgroup.WG, ctx context.Context, p payload.Par
 			return err
 		}
 	}
-	if tok, ok := token.(*tokens.BearerToken); ok {
-		//todo - this could be nil and cause an issue:
-		if !tok.BearerToken.VerifySignature() {
-			fmt.Println("ERROR Signature not verified!!!")
-			return errors.New("TOKEN IS NOT VERIFIED!!!!")
+
+	var bearerToken *bearer.Token
+	if tok, ok := token.(*tokens.BearerToken); !ok {
+		if tok, ok := token.(*tokens.PrivateBearerToken); !ok {
+			return errors.New("no bearer token provided")
 		} else {
-			j, _ := json.MarshalIndent(tok.BearerToken, "", " ")
-			fmt.Printf("verified %s\n", j)
-			fmt.Printf("table %+v\r\n", tok.BearerToken.EACLTable())
+			bearerToken = tok.BearerToken
 		}
+	} else {
+		bearerToken = tok.BearerToken
 	}
-	if err := objectParameters.WriteCloser.Close(); err != nil {
-		var errAccess apistatus.ObjectAccessDenied
-		if errors.Is(err, &errAccess) {
-			fmt.Println("access reason:", errAccess.Error())
+	if !bearerToken.VerifySignature() {
+		fmt.Println("ERROR Signature not verified!!!")
+		return errors.New("TOKEN IS NOT VERIFIED!!!!")
+	} else {
+		j, _ := json.MarshalIndent(bearerToken, "", " ")
+		fmt.Printf("verified %s\n", j)
+		fmt.Printf("table %+v\r\n", bearerToken.EACLTable())
+	}
+
+	var payloadWriter *slicer.PayloadWriter
+	if payloadWriter, ok = objectParameters.WriteCloser.(*slicer.PayloadWriter); !ok {
+		actionChan <- o.Notification(
+			"upload failed",
+			"object "+p.ID()+" failed to upload", //we gleaned the ID during the write initiator.
+			notification.Error,
+			notification.ActionNotification)
+		return errors.New("could retriever the writer.")
+	} else {
+		if err := payloadWriter.Close(); err != nil {
+			var errAccess apistatus.ObjectAccessDenied
+			if errors.Is(err, &errAccess) {
+				fmt.Println("access reason:", errAccess.Error())
+			}
+			fmt.Println("error closing writeCloser ", err)
+			return err
 		}
-		fmt.Println("error closing writeCloser ", err)
-		return err
-	}
-	if payloadWriter, ok := objectParameters.WriteCloser.(*slicer.PayloadWriter); ok {
 		objectParameters.Id = payloadWriter.ID().String()
 		fmt.Println("pushing data for container ", p.ParentID())
-		fmt.Println("reached end of file, ", objectParameters.Id)
+		fmt.Println("reached end of file, ", payloadWriter.ID())
 	}
-	fmt.Println("reached end of file, ", p.ID())
+
+	fmt.Println("reached end of file, ", objectParameters.Id)
+	localObject := Object{
+		ParentID: p.ParentID(),
+		Id:       payloadWriter.ID().String(), //fixme - find out how objectParameters.ID is the old ID....
+	}
+	fmt.Println("emitting created object ", localObject)
+	if err := objectParameters.ObjectEmitter.Emit(ctx, emitter.ObjectAddUpdate, localObject); err != nil {
+		fmt.Println("could not emit add update ", err)
+	}
 	actionChan <- o.Notification(
 		"upload complete!",
-		"object "+p.ID()+" completed", //we gleaned the ID during the write initiator.
+		"object "+objectParameters.Id+" completed", //we gleaned the ID during the write initiator.
 		notification.Success,
 		notification.ActionNotification)
-	//if oParameter, ok := p.(ObjectParameter); ok {
-	//
-	//} else {
-	//	return errors.New("could not retrieve ID of object")
-	//}
 	return nil
 }
 
@@ -503,5 +597,5 @@ type Object struct {
 	ContentType string            `json:"contentType"`
 	Attributes  map[string]string `json:"attributes"`
 	Size        uint64            `json:"size"`
-	CreatedAt   time.Time         `json:"CreatedAt"`
+	CreatedAt   int64             `json:"CreatedAt"`
 }

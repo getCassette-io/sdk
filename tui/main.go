@@ -214,7 +214,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							GateAccount: &gateKey,
 							Pl:          m.controller.Pl,
 							//ReadWriter:       nil,
-							ContainerEmitter: emitter.MockObjectEvent{}, //this should update the containerList when new containers appear
+							ContainerEmitter: emitter.MockContainerEvent{}, //this should update the containerList when new containers appear
 							//Attrs:            nil,
 							Verb: session.VerbContainerPut,
 							Id:   "87JeshQhXKBw36nULzpLpyn34Mhv1kGCccYyHU2BqGpT",

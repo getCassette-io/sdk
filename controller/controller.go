@@ -21,7 +21,9 @@ import (
 	"github.com/configwizard/sdk/wallet"
 	"github.com/google/uuid"
 	"github.com/nspcc-dev/neo-go/pkg/crypto/keys"
+	"github.com/nspcc-dev/neo-go/pkg/encoding/fixedn"
 	"github.com/nspcc-dev/neo-go/pkg/util"
+	neoWallet "github.com/nspcc-dev/neo-go/pkg/wallet"
 	wal "github.com/nspcc-dev/neo-go/pkg/wallet"
 	"github.com/nspcc-dev/neofs-sdk-go/client"
 	cid "github.com/nspcc-dev/neofs-sdk-go/container/id"
@@ -31,7 +33,9 @@ import (
 	"github.com/nspcc-dev/neofs-sdk-go/session"
 	"github.com/nspcc-dev/neofs-sdk-go/user"
 	"log"
+	"math/big"
 	"reflect"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -40,21 +44,15 @@ import (
 type ObjectActionType func(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error
 type ContainerActionType func(wg *waitgroup.WG, ctx context.Context, p container.ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error
 
-// ObjectAction defines the interface for actions that can be performed on objects
-type ObjectAction interface {
-
-	//todo - payload currently holds the signed token, but the naming here could be better
-	Head(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error
-	Read(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error
-	Write(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error
-	Delete(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error
-	List(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error
-}
-
 type MockWallet struct {
 	wal.Account
+	emitter          emitter.Emitter
+	Ctx              context.Context `json:"-"`
+	PublicKey        string          `json:"publicKey"`
+	WalletAddress    string          `json:"walletAddress"`
+	Network          string          `json:"network"`
+	AccountType      string          `json:"account_type"`
 	OriginalMessage  string
-	WalletAddress    string
 	HexPubKey        string
 	HexSignature     string
 	HexSalt          string
@@ -66,10 +64,12 @@ func (w MockWallet) Address() string {
 }
 
 func NewMockWallet() MockWallet {
+	//these values are incorrect for this wallet address.
 	return MockWallet{
 		OriginalMessage: "Hello, world!",
-		WalletAddress:   "",
-		HexPubKey:       "0382fcb005ae7652401fbe1d6345f77110f98db7122927df0f3faf3b62d1094071",
+		WalletAddress:   "NQtxsStXxvtRyz2B1yJXTXCeEoxsUJBkxW",
+		PublicKey:       "031ad3c83a6b1cbab8e19df996405cb6e18151a14f7ecd76eb4f51901db1426f0b",
+		HexPubKey:       "031ad3c83a6b1cbab8e19df996405cb6e18151a14f7ecd76eb4f51901db1426f0b",
 		HexSignature:    "6eb490f17f30c3e85f032ff47247499efe5cb0ce94dab5e31647612e361053574c96d584d3c185fb8474207e8f649d856b4d60b573a195d5e67e621a2b4c7f87",
 		HexSalt:         "3da1f339213180ed4c46a12b6bd57eb6",
 		HexSignedMessage: "" +
@@ -100,10 +100,18 @@ func (w MockWallet) PublicKeyHexString() string {
 	// retrieve the public key from the wallet
 	return w.HexPubKey
 }
+func (w *MockWallet) SetEmitter(em emitter.Emitter) {
+	w.emitter = em
+}
 
 type RawAccount struct {
+	Ctx           context.Context `json:"-"`
+	WalletAddress string          `json:"walletAddress"`
+	PublicKey     string          `json:"publicKey"`
+	Network       string          `json:"network"`
+	AccountType   string          `json:"account_type"`
 	*wal.Account
-	emitter emitter.Emitter
+	emitter emitter.Emitter `json:"-"`
 }
 
 func NewRawWalletFromFile(filepath string) (RawAccount, error) {
@@ -116,6 +124,9 @@ func NewRawAccount(a *wal.Account) (RawAccount, error) {
 		Account: a,
 	}, nil
 }
+func (w *RawAccount) SetEmitter(em emitter.Emitter) {
+	w.emitter = em
+}
 func (w RawAccount) Sign(p payload.Payload) error {
 	var e = (neofsecdsa.SignerRFC6979)(w.Account.PrivateKey().PrivateKey)
 	signed, err := e.Sign(p.OutgoingData)
@@ -126,17 +137,21 @@ func (w RawAccount) Sign(p payload.Payload) error {
 		p.Signature = &payload.Signature{}
 	}
 	p.Signature.HexSignature = hex.EncodeToString(signed)
+	////p := w.PublicKey()
+	//exampel := ecdsa.PublicKey(w.PublicKey())
+	//pKeySgtring := hex.EncodeToString(elliptic.MarshalCompressed(elliptic.P256(), exampel.X, exampel.Y))
+	p.Signature.HexPublicKey = w.PublicKey
 	//p.OutgoingData = signed //fixme: total hack. This is not how this field should be used
 	return w.emitter.Emit(context.Background(), emitter.RequestSign, p)
 }
 
 func (w RawAccount) PublicKeyHexString() string {
 	// retrieve the public key from the wallet
-	return w.Account.PublicKey().String()
+	return w.PublicKey //fixme - should come from wallet
 }
 
 func (w RawAccount) Address() string {
-	return w.Account.Address
+	return w.WalletAddress //fixme should come from wallet. Hardcoded now
 }
 
 type WCWallet struct {
@@ -144,6 +159,7 @@ type WCWallet struct {
 	WalletAddress string          `json:"walletAddress"`
 	PublicKey     string          `json:"publicKey"`
 	Network       string          `json:"network"`
+	AccountType   string          `json:"account_type"`
 	emitter       emitter.Emitter `json:"-"`
 }
 
@@ -180,6 +196,7 @@ type TokenManager interface {
 	FindContainerSessionToken(address string, id cid.ID, epoch uint64) (tokens.Token, error)
 	FindBearerToken(address string, id cid.ID, epoch uint64, operation eacl.Operation) (tokens.Token, error)
 	GateKey() wal.Account
+	Type() string
 }
 
 // Controller manages the frontend and backend/SDK interconnectivity
@@ -194,6 +211,7 @@ type Controller struct {
 	logger                 *log.Logger
 	wallet                 Account
 	TokenManager           TokenManager
+	GateKey                neoWallet.Account
 	Signer                 emitter.Emitter
 	Notifier               notification.Notifier
 	ProgressHandlerManager *notification.ProgressHandlerManager
@@ -211,7 +229,7 @@ func NewCustomController(wg *sync.WaitGroup, ctx context.Context /*cancelFunc co
 	if err != nil {
 		return Controller{}, err
 	}
-	tokenManager := tokens.New(ephemeralAccount, true)
+	tokenManager := tokens.NewPrivateKeyTokenManager(ephemeralAccount, true)
 	gateKey := tokenManager.GateKey()
 	pl, err := gspool.GetPool(ctx, gateKey.PrivateKey().PrivateKey, utils.RetrieveStoragePeers(network))
 	if err != nil {
@@ -219,15 +237,15 @@ func NewCustomController(wg *sync.WaitGroup, ctx context.Context /*cancelFunc co
 		log.Fatal(err)
 	}
 	c := Controller{
-		selectedNetwork: network,
-		Pl:              pl,
-		wg:              wg,
-		ctx:             ctx,
-		//cancelCtx:              cancelFunc, //todo - the controller should be able to kill everything
+		selectedNetwork:        network,
+		Pl:                     pl,
+		wg:                     wg,
+		ctx:                    ctx,
 		OperationHandler:       make(map[string]Context),
 		logger:                 logger,
 		DB:                     db,
-		TokenManager:           tokenManager,
+		TokenManager:           &tokenManager,
+		GateKey:                gateKey,
 		Notifier:               notifier,
 		ProgressHandlerManager: notification.NewProgressHandlerManager(notification.DataProgressHandlerFactory, progressBarEmitter),
 		pendingEvents:          make(map[payload.UUID]payload.Payload),
@@ -237,21 +255,17 @@ func NewCustomController(wg *sync.WaitGroup, ctx context.Context /*cancelFunc co
 	c.Notifier.ListenAndEmit() //this sends out notifications to the frontend.
 	return c, nil
 }
-func NewMockController(progressBarEmitter emitter.Emitter, network utils.Network, logger *log.Logger) (Controller, error) {
-	wg := &sync.WaitGroup{}
-	db := database.NewUnregisteredMockDB()
+func NewMockController(wg *sync.WaitGroup, ctx context.Context /*cancelFunc context.CancelFunc,*/, progressBarEmitter emitter.Emitter,
+	network utils.Network,
+	notifier notification.Notifier,
+	db database.Store,
+	logger *log.Logger) (Controller, error) {
 	ephemeralAccount, err := wal.NewAccount()
 	if err != nil {
 		return Controller{}, err
 	}
-	notifyEmitter := notification.MockNotificationEvent{Name: "notification events:", DB: db}
-	//create a notification manager
-	ctx, _ := context.WithCancel(context.Background())
-	idGenerator := func() string {
-		return "mock-notifier-94d9a4c7-9999-4055-a549-f51383edfe57"
-	}
-	n := notification.NewNotificationManager(wg, notifyEmitter, ctx, idGenerator)
-	tokenManager := tokens.New(ephemeralAccount, true)
+
+	tokenManager := tokens.NewMockTokenManager(ephemeralAccount, true)
 	gateKey := tokenManager.GateKey()
 	fmt.Println("retrieving network pool, standby...")
 	pl, err := gspool.GetPool(ctx, gateKey.PrivateKey().PrivateKey, utils.RetrieveStoragePeers(network))
@@ -260,16 +274,16 @@ func NewMockController(progressBarEmitter emitter.Emitter, network utils.Network
 		log.Fatal(err)
 	}
 	c := Controller{
-		selectedNetwork: network,
-		Pl:              pl,
-		wg:              wg,
-		ctx:             ctx,
-		//cancelCtx:              cancelFunc, //todo - the controller should be able to kill everything
+		selectedNetwork:        network,
+		Pl:                     pl,
+		wg:                     wg,
+		ctx:                    ctx,
 		OperationHandler:       make(map[string]Context),
 		logger:                 logger,
 		DB:                     db,
 		TokenManager:           tokenManager,
-		Notifier:               n, //fixme - the setting of the ctx is bad...
+		GateKey:                gateKey,
+		Notifier:               notifier, //fixme - the setting of the ctx is bad...
 		ProgressHandlerManager: notification.NewProgressHandlerManager(notification.DataProgressHandlerFactory, progressBarEmitter),
 		pendingEvents:          make(map[payload.UUID]payload.Payload),
 		objectActionMap:        make(map[payload.UUID]ObjectActionType),
@@ -345,12 +359,18 @@ func (c *Controller) Balances() ([]wallet.Nep17Token, error) {
 			continue // Try the next node
 		}
 
+		amount, ok := new(big.Int).SetString(strconv.FormatInt(neofsGasBalance.Value(), 10), 10)
+		if !ok {
+			// Handle conversion error
+			continue
+		}
 		// Process and return balances if successful
 		neoFSBalance := wallet.Nep17Token{
-			Asset:     util.Uint160{},                  // Use appropriate Asset ID for NeoFS if available
-			Amount:    uint64(neofsGasBalance.Value()), // Consider precision adjustment
-			Precision: int(neofsGasBalance.Precision()),
-			Symbol:    wallet.NEO_FS_GAS_BALANCE,
+			Asset:        util.Uint160{},                  // Use appropriate Asset ID for NeoFS if available
+			Amount:       uint64(neofsGasBalance.Value()), // Consider precision adjustment
+			Precision:    int(neofsGasBalance.Precision()),
+			PrettyAmount: fixedn.ToString(amount, int(neofsGasBalance.Precision())),
+			Symbol:       wallet.NEO_FS_GAS_BALANCE,
 		}
 		balances = append([]wallet.Nep17Token{neoFSBalance}, balances...)
 		return balances, nil
@@ -365,12 +385,20 @@ func (c *Controller) Balances() ([]wallet.Nep17Token, error) {
 
 // these kind of have to be used in harmony
 func (c *Controller) SetAccount(a Account) {
+	fmt.Println("setting account here to ", a, reflect.TypeOf(a))
 	c.wallet = a
 }
 func (c *Controller) SetSigningEmitter(em emitter.Emitter) {
 	c.Signer = em
-	if wcWallet, ok := c.wallet.(*WCWallet); ok {
+	fmt.Println("type of wallet here is ", reflect.TypeOf(c.wallet))
+	if wcWallet, ok := c.wallet.(WCWallet); ok {
 		wcWallet.SetEmitter(em)
+	} else if rawWallet, ok := c.wallet.(RawAccount); ok {
+		rawWallet.SetEmitter(em)
+	} else if mockWallet, ok := c.wallet.(MockWallet); ok {
+		mockWallet.SetEmitter(em)
+	} else {
+		fmt.Println("no emitter set")
 	}
 }
 func NewDefaultController(a Account) (Controller, error) {
@@ -428,6 +456,7 @@ func (c *Controller) UpdateFromPrivateKey(signedPayload payload.Payload) error {
 		updatedPayload.Complete = true
 		updatedPayload.Signature = &payload.Signature{}
 		updatedPayload.Signature.HexSignature = signedPayload.Signature.HexSignature
+		updatedPayload.Signature.HexPublicKey = signedPayload.Signature.HexPublicKey
 		// Update the map with the new struct
 		c.pendingEvents[payload.UUID(signedPayload.Uid)] = updatedPayload
 		// Notify through the channel
@@ -553,8 +582,12 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 		fmt.Println("just going to always force session token creation")
 	} else {
 		if tok, err := c.TokenManager.FindBearerToken(c.wallet.Address(), cnrId, p.Epoch(), eacl.OperationSearch); err == nil {
-			if t, ok := tok.(*tokens.BearerToken); !ok {
-				return errors.New("no session token available")
+			var t tokens.Token
+			var ok bool
+			if t, ok = tok.(*tokens.BearerToken); !ok { //this needs to change with the manager type
+				if t, ok = tok.(*tokens.PrivateBearerToken); !ok { //this needs to change with the manager type
+					return errors.New("no bearer token available")
+				}
 			} else {
 				if err := action(wg, ctx, containerParameters, actionChan, t); err != nil {
 					//notification (interface) handler would handle any errors here. (c.notificationHandler interface type)
@@ -610,7 +643,20 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 			fmt.Println("failed to create bearer ", err)
 			return err
 		}
-		token = &tokens.BearerToken{BearerToken: &bt}
+		switch c.TokenManager.Type() {
+		case tokens.TypePrivateTokenManager:
+			// Attempt to cast 'token' to '*tokens.PrivateContainerSessionToken'
+			if tokManager, ok := c.TokenManager.(*tokens.PrivateKeyTokenManager); ok {
+				privateBearerToken := tokManager.PopulatePrivateBearerToken(bt)
+				token = &privateBearerToken
+			} else {
+				fmt.Println("weird error. Shouldn't be here, no token manager")
+				panic("no token manager - odd error")
+			}
+
+		default:
+			token = &tokens.BearerToken{BearerToken: &bt}
+		}
 	}
 	neoFSPayload.OutgoingData = token.SignedData()
 
@@ -635,6 +681,7 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 				// Payload signed, perform the action
 				//we now need to add the signed token to the map
 				//success? add it to list.
+				//fixme - we are signing every time here which will be causing wallet connect to ask for too many signatures
 				var latestPayload payload.Payload
 				if pendingPayload, exists := c.pendingEvents[payload.UUID(neoFSPayload.Uid)]; exists {
 					latestPayload = pendingPayload
@@ -642,7 +689,7 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 					return
 				}
 				if err := token.Sign(c.wallet.Address(), latestPayload); err != nil {
-					c.logger.Println("error signing token ", err)
+					c.logger.Println("1. container error signing token ", err, c.wallet.Address(), latestPayload)
 					return
 				}
 				token.SetSignature(*latestPayload.Signature) //fix me - get rid of this and the getter
@@ -656,20 +703,57 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 					c.TokenManager.AddBearerToken(c.Account().Address(), cnrId.String(), token) //listing container contents is done with a bearer
 				}
 				if act, exists := c.containerActionMap[payload.UUID(latestPayload.Uid)]; exists {
-					//fixme - this should be a session token
 					if err := token.Sign(c.wallet.Address(), latestPayload); err != nil {
-						c.logger.Println("error signing token ", err)
+						c.logger.Println("2. container error signing token ", err, c.wallet.Address(), latestPayload)
 						return
 					}
-					//check for specifically session token signing
-					if t, ok := token.(*tokens.ContainerSessionToken); ok {
-						fmt.Println("verifying that the session has been signed")
-						if !t.SessionToken.VerifySignature() {
-							fmt.Println("verifying signature failed for container session token")
-							return
-						}
-						fmt.Println("token passed verification. Attemping container action.")
-					}
+					//var t any  // Declare 't' as an empty interface to hold the cast token
+					//
+					//switch c.TokenManager.Type() {
+					//case tokens.TypePrivateTokenManager:
+					//	// Attempt to cast 'token' to '*tokens.PrivateContainerSessionToken'
+					//	if castToken, ok := token.(*tokens.PrivateContainerSessionToken); ok {
+					//		t = castToken.SessionToken
+					//	} else if castToken, ok := token.(*tokens.PrivateBearerToken); ok {
+					//		t = castToken.BearerToken
+					//	}
+					//default:
+					//	// Attempt to cast 'token' to '*tokens.ContainerSessionToken'
+					//	if castToken, ok := token.(*tokens.ContainerSessionToken); ok {
+					//		t = castToken.SessionToken
+					//	}
+					//}
+					//// Now 't' holds the cast token, but you should check whether the casting was successful
+					//if t != nil {
+					//	// 't' is successfully cast, and you can proceed with using it
+					//	fmt.Println("verifying that the session has been signed")
+					//	if !t.VerifySignature() {
+					//		fmt.Println("verifying signature failed for container session token")
+					//		return
+					//	}
+					//	fmt.Println("token passed verification. Attemping container action.")
+					//} else {
+					//	fmt.Println("there was not available session token for the manager type")
+					//	return
+					//}
+
+					//var typ any
+					//if c.TokenManager.Type() == tokens.TypeWCTokenManager {
+					//	typ = typ.(*tokens.ContainerSessionToken)
+					//} else if c.TokenManager.Type() == tokens.TypeMockTokenManager {
+					//	typ = typ.(*tokens.ContainerSessionToken)
+					//} else if c.TokenManager.Type() == tokens.TypePrivateTokenManager {
+					//	typ = typ.(*tokens.PrivateContainerSessionToken)
+					//}
+					////check for specifically session token signing
+					//if t, ok := token.(*tokens.ContainerSessionToken); ok {
+					//	fmt.Println("verifying that the session has been signed")
+					//	if !t.SessionToken.VerifySignature() {
+					//		fmt.Println("verifying signature failed for container session token")
+					//		return
+					//	}
+					//	fmt.Println("token passed verification. Attemping container action.")
+					//}
 					if err := act(wg, ctx, containerParameters, actionChan, token); err != nil {
 						//handle the error with the UI (n)
 						c.logger.Println("error executing action ", err)
@@ -756,7 +840,7 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 		var ok bool
 		//var objectWriteCloser io.WriteCloser
 		if objectParameters, ok = p.(object.ObjectParameter); ok {
-			if p.Operation() == eacl.OperationGet {
+			if p.Operation() == eacl.OperationGet { //fixme: - move this like the put was moved.
 				//if objectParameters, ok = p.(object.ObjectParameter); ok {
 				_, objectReader, err := object.InitReader(ctx, objectParameters, bearerToken)
 				if err != nil {
@@ -785,6 +869,7 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 			fmt.Println("operation get, but no objectparameterss. Bailing out")
 			return err
 		}
+		fmt.Printf("objectParameters Before %s - %+v\r\n", objectParameters.ActionOperation.String(), objectParameters)
 		if err := action(wg, ctx, objectParameters, actionChan, bearerToken); err != nil {
 			return err
 		}
@@ -880,6 +965,7 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 						fmt.Println("operation get, but no objectparameterss. Bailing out")
 						return
 					}
+					fmt.Printf("objectParameters Before %s - %+v\r\n", objectParameters.ActionOperation.String(), objectParameters)
 					if err := act(wg, ctx, objectParameters, actionChan, bearerToken); err != nil {
 						//handle the error with the UI (n)
 						c.logger.Println("error executing action ", err)

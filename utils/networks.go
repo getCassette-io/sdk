@@ -1,7 +1,9 @@
 package utils
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/configwizard/sdk/config"
 	"golang.org/x/exp/maps"
 )
@@ -11,6 +13,40 @@ type Network string
 const MainNet Network = "mainnet"
 const TestNet Network = "testnet"
 
+// the status.neofs data structure
+
+type JSONData struct {
+	Status            map[string]string     `json:"status"`
+	StatusMsgs        map[string][]string   `json:"statusmsgs"`
+	NetworkEpoch      map[string]float64    `json:"network_epoch"`
+	Containers        map[string]float64    `json:"containers"`
+	Time              float64               `json:"time"`
+	NodeMap           []NodeMap             `json:"node_map"`
+	Contract          map[string]Contract   `json:"contract"`
+	Gateways          map[string][][]string `json:"gateways"`
+	SideChainRPCNodes map[string][][]string `json:"side_chain_rpc_nodes"`
+	StorageNodes      map[string][][]string `json:"storage_nodes"`
+	NeoGoRPCNodes     map[string][][]string `json:"neo_go_rpc_nodes"`
+}
+
+type NodeMap struct {
+	Latitude  string `json:"latitude"`
+	Location  string `json:"location"`
+	Longitude string `json:"longitude"`
+	Nodes     []Node `json:"nodes"`
+}
+
+type Node struct {
+	Net   string  `json:"net"`
+	Value float64 `json:"value"`
+}
+
+type Contract struct {
+	Address    string `json:"address"`
+	ScriptHash string `json:"script_hash"`
+}
+
+// currently out network data structure
 type NetworkData struct {
 	Name         string
 	ID           string
@@ -22,6 +58,14 @@ type NetworkData struct {
 type NodeSelection struct {
 	Nodes   []config.Peer
 	current int
+}
+
+var networks = map[Network]NetworkData{}
+
+//fixme - this should not be how we do this it should be loaded dynamically
+
+func init() {
+	networks = defaultNetworkData
 }
 
 func (s *NodeSelection) getNext() (config.Peer, error) {
@@ -50,9 +94,51 @@ func RetrieveNetworkFileSystemAddress(n Network) string {
 	return networks[n].Address
 }
 
-var networks = map[Network]NetworkData{
+func LoadNetworkData(jsonBytes []byte) (map[Network]NetworkData, error) {
+	var jsonData JSONData
+	if err := json.Unmarshal(jsonBytes, &jsonData); err != nil {
+		return nil, err
+	}
+
+	networks := make(map[Network]NetworkData)
+
+	// Transform JSONData into map[Network]NetworkData
+	for networkType, contract := range jsonData.Contract {
+		var sidechainRPC []string
+		for _, rpc := range jsonData.SideChainRPCNodes[networkType] {
+			sidechainRPC = append(sidechainRPC, rpc[0]) // Assuming you want the first URL
+		}
+
+		storageNodes := make(map[string]config.Peer)
+		for i, node := range jsonData.StorageNodes[networkType] {
+			storageNodes[fmt.Sprintf("%d", i)] = config.Peer{
+				Address:  node[0], // Assuming you want the first URL
+				Priority: i + 1,
+				Weight:   1,
+			}
+		}
+
+		var rpcNodes []string
+		for _, rpc := range jsonData.NeoGoRPCNodes[networkType] {
+			rpcNodes = append(rpcNodes, rpc[0]) // Assuming you want the first URL
+		}
+
+		networks[Network(networkType)] = NetworkData{
+			Name:         networkType,
+			ID:           networkType,
+			Address:      contract.Address,
+			SidechainRPC: sidechainRPC,
+			StorageNodes: storageNodes,
+			RpcNodes:     rpcNodes,
+		}
+	}
+
+	return networks, nil
+}
+
+var defaultNetworkData = map[Network]NetworkData{
 	"mainnet": {
-		Name:    "Main Net",
+		Name:    "mainnet",
 		ID:      "mainnet",
 		Address: "NNxVrKjLsRkWsmGgmuNXLcMswtxTGaNQLk",
 		SidechainRPC: []string{
@@ -91,7 +177,7 @@ var networks = map[Network]NetworkData{
 		},
 	},
 	"testnet": {
-		Name:    "Test Net",
+		Name:    "testnet",
 		ID:      "testnet",
 		Address: "NZAUkYbJ1Cb2HrNmwZ1pg9xYHBhm2FgtKV",
 		SidechainRPC: []string{
@@ -105,22 +191,22 @@ var networks = map[Network]NetworkData{
 		},
 		StorageNodes: map[string]config.Peer{
 			"0": {
-				Address:  "grpcs://st1.t5.fs.neo.org:8080",
+				Address:  "grpcs://st1.t5.fs.neo.org:8082",
 				Priority: 1,
 				Weight:   1,
 			},
 			"1": {
-				Address:  "grpcs://st2.t5.fs.neo.org:8080",
+				Address:  "grpcs://st2.t5.fs.neo.org:8082",
 				Priority: 2,
 				Weight:   1,
 			},
 			"2": {
-				Address:  "grpcs://st3.t5.fs.neo.org:8080",
+				Address:  "grpcs://st3.t5.fs.neo.org:8082",
 				Priority: 3,
 				Weight:   1,
 			},
 			"3": {
-				Address:  "grpcs://st4.t5.fs.neo.org:8080",
+				Address:  "grpcs://st4.t5.fs.neo.org:8082",
 				Priority: 4,
 				Weight:   1,
 			},

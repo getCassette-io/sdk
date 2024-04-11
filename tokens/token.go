@@ -23,6 +23,13 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
+)
+
+const (
+	TypePrivateTokenManager string = "private_token_manager"
+	TypeWCTokenManager             = "wc_token_manager"
+	TypeMockTokenManager           = "mock_token_manager"
 )
 
 type Token interface {
@@ -33,22 +40,22 @@ type Token interface {
 	SignedData() []byte
 }
 
-type PrivateSessionToken struct {
+type PrivateContainerSessionToken struct {
 	Signature    payload.Signature
 	SessionToken *session.Container
 	Wallet       *wallet.Account
 }
 
-func (m *PrivateSessionToken) SetSignature(s payload.Signature) {
+func (m *PrivateContainerSessionToken) SetSignature(s payload.Signature) {
 	m.Signature = s
 }
-func (m PrivateSessionToken) GetSignature() payload.Signature {
+func (m PrivateContainerSessionToken) GetSignature() payload.Signature {
 	return m.Signature
 }
-func (m PrivateSessionToken) InvalidAt(epoch uint64) bool {
+func (m PrivateContainerSessionToken) InvalidAt(epoch uint64) bool {
 	return false
 }
-func (m PrivateSessionToken) Sign(issuerAddress string, signedPayload payload.Payload) error {
+func (m PrivateContainerSessionToken) Sign(issuerAddress string, signedPayload payload.Payload) error {
 	if m.Wallet == nil {
 		return errors.New(utils.ErrorNoSession)
 	}
@@ -56,7 +63,7 @@ func (m PrivateSessionToken) Sign(issuerAddress string, signedPayload payload.Pa
 	return m.SessionToken.Sign(user.NewAutoIDSigner(k.PrivateKey))
 
 }
-func (m PrivateSessionToken) SignedData() []byte {
+func (m PrivateContainerSessionToken) SignedData() []byte {
 	return m.SessionToken.SignedData()
 }
 
@@ -75,15 +82,15 @@ func (m PrivateBearerToken) GetSignature() payload.Signature {
 func (m PrivateBearerToken) InvalidAt(epoch uint64) bool {
 	return false
 }
+
+/*
+	func (m Manager) TemporarySignBearerTokenWithPrivateKey(bt *bearer.Token) error {
+		var k = m.wallet.Accounts[0].PrivateKey()
+		var e neofsecdsa.Signer
+		e = (neofsecdsa.Signer)(k.PrivateKey)
+		return bt.Sign(e) //is this the owner who is giving access priveliges???
+*/
 func (m PrivateBearerToken) Sign(issuerAddress string, signedPayload payload.Payload) error {
-	//this is the same as below however we receive something that can become a signature directly
-	fmt.Println("the wallet created signature ", signedPayload.Signature.HexSignature)
-	fmt.Println("m.Wallet.PublicKey().Bytes()", m.Wallet.PublicKey().Bytes())
-	//fixme: types of signing should not be part of the controller
-	fmt.Println("c.wallet Sign", m.Wallet)
-	if m.Wallet == nil {
-		return errors.New(utils.ErrorNoSession)
-	}
 	decodedSignature, err := hex.DecodeString(signedPayload.Signature.HexSignature)
 	if err != nil {
 		fmt.Println("error signing ", err)
@@ -93,8 +100,13 @@ func (m PrivateBearerToken) Sign(issuerAddress string, signedPayload payload.Pay
 	signature := refs.Signature{}
 	signature.SetSign(decodedSignature)
 	signature.SetScheme(refs.ECDSA_RFC6979_SHA256)
-	signature.SetKey(m.Wallet.PublicKey().Bytes())
-
+	//fixme - this is all over the place
+	//p := m.Wallet.PublicKey()
+	//exampel := ecdsa.PublicKey(*p)
+	//pKeySgtring := hex.EncodeToString(elliptic.MarshalCompressed(elliptic.P256(), exampel.X, exampel.Y))
+	bytesPublicKey, err := hex.DecodeString(signedPayload.Signature.HexPublicKey)
+	signature.SetKey(bytesPublicKey)
+	fmt.Println("wallet ", m.Wallet, signedPayload.Signature.HexPublicKey)
 	var b acl.BearerToken
 	m.BearerToken.WriteToV2(&b) //convert the token to a v2 type
 	b.SetSignature(&signature)  //so that we can sgn it
@@ -117,13 +129,43 @@ func (m PrivateBearerToken) SignedData() []byte {
 type PrivateKeyTokenManager struct {
 	BearerTokens  map[string]Token //Will be loaded from database if we want to keep sessions across closures.
 	SessionTokens map[string]Token
-	W             wallet.Account
+	W             *wallet.Account
 	HaveToken     bool
+	mutex         sync.Mutex // Add a mutex to the struct
 }
 
-func (t PrivateKeyTokenManager) AddBearerToken(address string, cnrID string, b Token) {
-	t.BearerTokens[fmt.Sprintf("%s.%s", address, cnrID)] = b
+func (t PrivateKeyTokenManager) Type() string {
+	return TypePrivateTokenManager
+}
 
+func NewPrivateKeyTokenManager(a *wallet.Account, persist bool) PrivateKeyTokenManager {
+	return PrivateKeyTokenManager{W: a, BearerTokens: make(map[string]Token), SessionTokens: make(map[string]Token)}
+}
+
+func (t *PrivateKeyTokenManager) AddBearerToken(address string, cnrID string, b Token) {
+	t.mutex.Lock()         // Lock the mutex before modifying the map
+	defer t.mutex.Unlock() // Ensure the mutex is unlocked after modifying
+	t.BearerTokens[fmt.Sprintf("%s.%s", address, cnrID)] = b
+}
+func (t *PrivateKeyTokenManager) AddSessionToken(address, cnrID string, b Token) {
+	t.mutex.Lock()         // Lock the mutex before modifying the map
+	defer t.mutex.Unlock() // Ensure the mutex is unlocked after modifying
+	t.SessionTokens[fmt.Sprintf("%s.%s", address, cnrID)] = b
+}
+
+// FindBearerToken should see if we have a valid token to do the job. If not create a new one.
+func (t PrivateKeyTokenManager) FindContainerSessionToken(address string, id cid.ID, epoch uint64) (Token, error) {
+	if tok, ok := t.SessionTokens[fmt.Sprintf("%s.%s", address, id)]; ok && tok.InvalidAt(1) {
+		tok, ok := tok.(*ContainerSessionToken)
+		if !ok {
+			return nil, errors.New("no session token")
+		}
+		if tok.InvalidAt(epoch) {
+			return tok, errors.New(utils.ErrorNoToken)
+		}
+		return tok, nil
+	}
+	return nil, errors.New(utils.ErrorNoToken)
 }
 
 func (t PrivateKeyTokenManager) NewSessionToken(lIat, lNbf, lExp uint64, cnrID cid.ID, verb session.ContainerVerb, gateKey keys.PublicKey) (Token, error) {
@@ -142,19 +184,22 @@ func (t PrivateKeyTokenManager) NewSessionToken(lIat, lNbf, lExp uint64, cnrID c
 	if err != nil {
 		return nil, fmt.Errorf("decode HEX public key from WalletConnect: %w", err)
 	}
-	var pubKey neofsecdsa.PublicKeyWalletConnect
+	var pubKey neofsecdsa.PublicKeyRFC6979
 	err = pubKey.Decode(bPubKey)
 	if err != nil {
 		return nil, fmt.Errorf("invalid/unsupported public key format from WalletConnect: %w", err)
 	}
 	issuer = user.ResolveFromECDSAPublicKey(ecdsa.PublicKey(pubKey))
 	sessionToken.SetIssuer(issuer)
-	return &PrivateSessionToken{
+	return &PrivateContainerSessionToken{
 		SessionToken: sessionToken,
-		Wallet:       &t.W,
+		Wallet:       t.W,
 	}, nil
 }
 
+func (t PrivateKeyTokenManager) PopulatePrivateBearerToken(bt bearer.Token) PrivateBearerToken {
+	return PrivateBearerToken{BearerToken: &bt, Wallet: t.W}
+}
 func (t PrivateKeyTokenManager) NewBearerToken(table eacl.Table, lIat, lNbf, lExp uint64, temporaryKey *keys.PublicKey) (Token, error) {
 	temporaryUser := user.ResolveFromECDSAPublicKey(*(*ecdsa.PublicKey)(temporaryKey))
 	var bearerToken bearer.Token
@@ -163,7 +208,7 @@ func (t PrivateKeyTokenManager) NewBearerToken(table eacl.Table, lIat, lNbf, lEx
 	bearerToken.SetExp(lExp)
 	bearerToken.SetIat(lIat)
 	bearerToken.SetNbf(lNbf)
-	return &PrivateBearerToken{Wallet: &t.W, BearerToken: &bearerToken}, nil
+	return &PrivateBearerToken{Wallet: t.W, BearerToken: &bearerToken}, nil
 }
 func (t PrivateKeyTokenManager) FindBearerToken(address string, id cid.ID, epoch uint64, operation eacl.Operation) (Token, error) {
 
@@ -193,7 +238,7 @@ func (t PrivateKeyTokenManager) FindBearerToken(address string, id cid.ID, epoch
 }
 
 func (t PrivateKeyTokenManager) GateKey() wallet.Account {
-	return t.W
+	return *t.W
 }
 
 type ContainerSessionToken struct {
@@ -324,6 +369,50 @@ func (b BearerToken) SignedData() []byte {
 	return b.BearerToken.SignedData()
 }
 
+type MockTokenManager struct {
+	BearerTokens  map[string]Token //Will be loaded from database if we want to keep sessions across closures.
+	SessionTokens map[string]Token //fixme - can this all be one in memory token store or do they need to be seperated
+	W             *wallet.Account
+}
+
+func (t MockTokenManager) Type() string {
+	return TypeMockTokenManager
+}
+
+func NewMockTokenManager(a *wallet.Account, persist bool) MockTokenManager {
+	return MockTokenManager{W: a, BearerTokens: make(map[string]Token), SessionTokens: make(map[string]Token)}
+}
+
+func (t MockTokenManager) GateKey() wallet.Account {
+	return *t.W
+}
+
+func (t MockTokenManager) AddBearerToken(address, cnrID string, b Token) {
+}
+
+func (t MockTokenManager) FindBearerToken(address string, id cid.ID, epoch uint64, operation eacl.Operation) (Token, error) {
+	var bearerToken bearer.Token
+	return &BearerToken{BearerToken: &bearerToken}, nil
+}
+func (t MockTokenManager) NewBearerToken(table eacl.Table, lIat, lNbf, lExp uint64, temporaryKey *keys.PublicKey) (Token, error) {
+	var bearerToken bearer.Token
+	return &BearerToken{BearerToken: &bearerToken}, nil
+}
+func (t MockTokenManager) AddSessionToken(address, cnrID string, b Token) {
+}
+func (t MockTokenManager) FindContainerSessionToken(address string, id cid.ID, epoch uint64) (Token, error) {
+	sessionToken := new(session.Container)
+	return &ContainerSessionToken{
+		SessionToken: sessionToken,
+	}, nil
+}
+func (t MockTokenManager) NewSessionToken(lIat, lNbf, lExp uint64, cnrID cid.ID, verb session.ContainerVerb, issuerKey keys.PublicKey) (Token, error) {
+	sessionToken := new(session.Container)
+	return &ContainerSessionToken{
+		SessionToken: sessionToken,
+	}, nil
+}
+
 // WalletConnectTokenManager is responsible for keeping track of all valid sessions so not to need to resign every time
 // for now just bearer tokens, for object actions, containers use sessions and will sign for each action
 // listing containers does not need a token
@@ -332,9 +421,15 @@ type WalletConnectTokenManager struct {
 	BearerTokens  map[string]Token //Will be loaded from database if we want to keep sessions across closures.
 	SessionTokens map[string]Token //fixme - can this all be one in memory token store or do they need to be seperated
 	W             *wallet.Account
+	mutex         sync.Mutex // Add a mutex to the struct
+
 }
 
-func New(a *wallet.Account, persist bool) WalletConnectTokenManager {
+func (t WalletConnectTokenManager) Type() string {
+	return TypeWCTokenManager
+}
+
+func NewWalletConnectTokenManager(a *wallet.Account, persist bool) WalletConnectTokenManager {
 	return WalletConnectTokenManager{W: a, BearerTokens: make(map[string]Token), SessionTokens: make(map[string]Token), Persisted: persist}
 }
 
@@ -342,7 +437,9 @@ func (t WalletConnectTokenManager) GateKey() wallet.Account {
 	return *t.W
 }
 
-func (t WalletConnectTokenManager) AddBearerToken(address, cnrID string, b Token) {
+func (t *WalletConnectTokenManager) AddBearerToken(address, cnrID string, b Token) {
+	t.mutex.Lock()         // Lock the mutex before modifying the map
+	defer t.mutex.Unlock() // Ensure the mutex is unlocked after modifying
 	t.BearerTokens[fmt.Sprintf("%s.%s", address, cnrID)] = b
 }
 
@@ -398,7 +495,9 @@ func (t WalletConnectTokenManager) NewBearerToken(table eacl.Table, lIat, lNbf, 
 func (t *WalletConnectTokenManager) WrapToken(token bearer.Token) Token {
 	return &BearerToken{BearerToken: &token}
 }
-func (t WalletConnectTokenManager) AddSessionToken(address, cnrID string, b Token) {
+func (t *WalletConnectTokenManager) AddSessionToken(address, cnrID string, b Token) {
+	t.mutex.Lock()         // Lock the mutex before modifying the map
+	defer t.mutex.Unlock() // Ensure the mutex is unlocked after modifying
 	t.SessionTokens[fmt.Sprintf("%s.%s", address, cnrID)] = b
 }
 

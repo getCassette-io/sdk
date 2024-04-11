@@ -1,8 +1,23 @@
 package views
 
+import (
+	"fmt"
+	"math/rand"
+	"time"
+)
+
 type Element struct {
 	ParentID, ID, Name, Hash string
 	Size                     float32
+}
+
+func GenerateRandomString(n int) string {
+	var base58Alphabet = []rune("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+	b := make([]rune, n)
+	for i := range b {
+		b[i] = base58Alphabet[rand.Intn(len(base58Alphabet))]
+	}
+	return string(b)
 }
 
 // Sample Containers
@@ -21,6 +36,29 @@ var objects = []Element{
 	{"C3", "O5", "Object 5", "Hash5", 6.0},
 	// Add more objects as needed
 }
+
+func init() {
+	// Seed the random number generator to ensure different results on each run.
+	// This should be done only once (or rarely) to avoid re-seeding too frequently.
+	rand.Seed(time.Now().UnixNano())
+	objects = []Element{}
+	for i, _ := range containers {
+		containers[i].ID = GenerateRandomString(43)
+		for j := 0; j < 5; j++ {
+			//create some mock objects
+			el := Element{
+				ParentID: containers[i].ID,
+				ID:       GenerateRandomString(43),
+				Name:     fmt.Sprintf("Mock Object %d", i),
+				Hash:     GenerateRandomString(43),
+				Size:     1025,
+			}
+			objects = append(objects, el)
+		}
+	}
+}
+
+// Generates a random string of a fixed length.
 
 // Function to filter objects by a container's ID
 func filterObjectsByContainerID(containerID string) []Element {
