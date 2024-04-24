@@ -2,7 +2,6 @@ package tokens
 
 import (
 	"crypto/ecdsa"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 	"github.com/nspcc-dev/neo-go/pkg/wallet"
 	"github.com/nspcc-dev/neofs-api-go/v2/acl"
 	"github.com/nspcc-dev/neofs-api-go/v2/refs"
+	session2 "github.com/nspcc-dev/neofs-api-go/v2/session"
 	"github.com/nspcc-dev/neofs-sdk-go/bearer"
 	cid "github.com/nspcc-dev/neofs-sdk-go/container/id"
 	neofscrypto "github.com/nspcc-dev/neofs-sdk-go/crypto"
@@ -56,12 +56,33 @@ func (m PrivateContainerSessionToken) InvalidAt(epoch uint64) bool {
 	return false
 }
 func (m PrivateContainerSessionToken) Sign(issuerAddress string, signedPayload payload.Payload) error {
-	if m.Wallet == nil {
-		return errors.New(utils.ErrorNoSession)
+	decodedSignature, err := hex.DecodeString(signedPayload.Signature.HexSignature)
+	if err != nil {
+		fmt.Println("error signing ", err)
+		return err
 	}
-	var k = m.Wallet.PrivateKey()
-	return m.SessionToken.Sign(user.NewAutoIDSigner(k.PrivateKey))
+	fmt.Println("decodedSignature", decodedSignature)
+	signature := refs.Signature{}
+	signature.SetSign(decodedSignature)
+	signature.SetScheme(refs.ECDSA_RFC6979_SHA256)
 
+	bytesPublicKey, err := hex.DecodeString(signedPayload.Signature.HexPublicKey)
+	signature.SetKey(bytesPublicKey)
+	fmt.Println("wallet ", m.Wallet, signedPayload.Signature.HexPublicKey)
+
+	var b session2.Token
+	m.SessionToken.WriteToV2(&b) //convert the token to a v2 type
+	b.SetSignature(&signature)   //so that we can sgn it
+
+	if err := m.SessionToken.ReadFromV2(b); err != nil {
+		fmt.Println("tried reading ", err)
+		return err
+	}
+	if !m.SessionToken.VerifySignature() {
+		fmt.Println("not signed")
+		return errors.New("token not signed")
+	}
+	return nil
 }
 func (m PrivateContainerSessionToken) SignedData() []byte {
 	return m.SessionToken.SignedData()
@@ -100,10 +121,7 @@ func (m PrivateBearerToken) Sign(issuerAddress string, signedPayload payload.Pay
 	signature := refs.Signature{}
 	signature.SetSign(decodedSignature)
 	signature.SetScheme(refs.ECDSA_RFC6979_SHA256)
-	//fixme - this is all over the place
-	//p := m.Wallet.PublicKey()
-	//exampel := ecdsa.PublicKey(*p)
-	//pKeySgtring := hex.EncodeToString(elliptic.MarshalCompressed(elliptic.P256(), exampel.X, exampel.Y))
+
 	bytesPublicKey, err := hex.DecodeString(signedPayload.Signature.HexPublicKey)
 	signature.SetKey(bytesPublicKey)
 	fmt.Println("wallet ", m.Wallet, signedPayload.Signature.HexPublicKey)
@@ -168,28 +186,34 @@ func (t PrivateKeyTokenManager) FindContainerSessionToken(address string, id cid
 	return nil, errors.New(utils.ErrorNoToken)
 }
 
-func (t PrivateKeyTokenManager) NewSessionToken(lIat, lNbf, lExp uint64, cnrID cid.ID, verb session.ContainerVerb, gateKey keys.PublicKey) (Token, error) {
+func (t PrivateKeyTokenManager) NewSessionToken(lIat, lNbf, lExp uint64, cnrID cid.ID, verb session.ContainerVerb, issuerKey keys.PublicKey) (Token, error) {
 	sessionToken := new(session.Container)
 	sessionToken.ForVerb(verb)
 	sessionToken.AppliedTo(cnrID)
 	sessionToken.SetID(uuid.New())
-	sessionToken.SetAuthKey((*neofsecdsa.PublicKey)(&gateKey))
+	ephemeralGateKey := t.W.PublicKey()
+	sessionToken.SetAuthKey((*neofsecdsa.PublicKey)(ephemeralGateKey))
 	sessionToken.SetIat(lIat)
 	sessionToken.SetNbf(lNbf)
 	sessionToken.SetExp(lExp)
 
 	var issuer user.ID
-
-	bPubKey, err := hex.DecodeString(t.W.PublicKey().String())
-	if err != nil {
-		return nil, fmt.Errorf("decode HEX public key from WalletConnect: %w", err)
-	}
-	var pubKey neofsecdsa.PublicKeyRFC6979
-	err = pubKey.Decode(bPubKey)
-	if err != nil {
-		return nil, fmt.Errorf("invalid/unsupported public key format from WalletConnect: %w", err)
-	}
-	issuer = user.ResolveFromECDSAPublicKey(ecdsa.PublicKey(pubKey))
+	//fmt.Println("WC sessioin token from key ", t.W.PublicKey().String())
+	//issuer = user.ResolveFromECDSAPublicKey(ecdsa.PublicKey((issuerKey))) //todo - where does this key come from?
+	//sessionToken.SetIssuer(issuer)
+	//
+	//var issuer user.ID
+	//
+	//bPubKey, err := hex.DecodeString()
+	//if err != nil {
+	//	return nil, fmt.Errorf("decode HEX public key from WalletConnect: %w", err)
+	//}
+	//var pubKey neofsecdsa.PublicKeyRFC6979
+	//err = pubKey.Decode(bPubKey)
+	//if err != nil {
+	//	return nil, fmt.Errorf("invalid/unsupported public key format from raw walelt: %w", err)
+	//}
+	issuer = user.ResolveFromECDSAPublicKey(ecdsa.PublicKey(issuerKey))
 	sessionToken.SetIssuer(issuer)
 	return &PrivateContainerSessionToken{
 		SessionToken: sessionToken,
@@ -460,6 +484,7 @@ func (t WalletConnectTokenManager) FindBearerToken(address string, id cid.ID, ep
 		//if tok.InvalidAt(epoch) {
 		//	return tok, errors.New(utils.ErrorNoToken)
 		//}
+		return tok, nil
 		records := bearerToken.EACLTable().Records()
 		for _, v := range records {
 			if v.Operation() == operation && v.Action() == eacl.ActionAllow {
@@ -538,10 +563,6 @@ func (t WalletConnectTokenManager) NewSessionToken(lIat, lNbf, lExp uint64, cnrI
 	fmt.Println("WC sessioin token from key ", t.W.PublicKey().String())
 	issuer = user.ResolveFromECDSAPublicKey(ecdsa.PublicKey((issuerKey))) //todo - where does this key come from?
 	sessionToken.SetIssuer(issuer)
-	fmt.Printf("issuer %+v --- is issuer \r\n", issuer, sessionToken.ID())
-	mar := sessionToken.Marshal()
-	sEnc := base64.StdEncoding.EncodeToString(mar)
-	fmt.Println("marshalled session token ", mar, "b64:", sEnc)
 	return &ContainerSessionToken{
 		SessionToken: sessionToken,
 	}, nil

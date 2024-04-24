@@ -35,6 +35,10 @@ func (o *MockContainer) Create(wg *waitgroup.WG, ctx context.Context, p Containe
 	//todo - create a new container
 	return nil
 }
+func (o *MockContainer) Restrict(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error {
+	//todo - create a new container
+	return nil
+}
 
 func (o *MockContainer) Head(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error {
 	localContainer := Container{
@@ -42,7 +46,7 @@ func (o *MockContainer) Head(wg *waitgroup.WG, ctx context.Context, p ContainerP
 		Name:       "Mock Container",
 		Id:         p.Id,
 		Attributes: make(map[string]string),
-		CreatedAt:  time.Now(),
+		CreatedAt:  time.Now().Unix(),
 	}
 	localContainer.Attributes["foo"] = "bar"
 	//todo == this can use the same mechanism (ContainerAddUpdate) as it can supply a full object that just overwrites any existing entry.

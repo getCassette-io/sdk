@@ -19,6 +19,7 @@ const (
 	ResponseSign              EventMessage = "response_sign_payload"
 	RequestAuthenticate       EventMessage = "request_authenticate"
 	ContainerListUpdate       EventMessage = "container_list_update"
+	ContainerRestrictUpdate   EventMessage = "container_restrict_update"
 	ContainerAddUpdate        EventMessage = "container_add_update"
 	HeadRetrieved             EventMessage = "head_retrieved" //used when not part of a larger asynchronous request
 	ContainerRemoveUpdate     EventMessage = "container_remove_update"
@@ -45,6 +46,7 @@ var AllEventMessages = []struct {
 	{RequestAuthenticate, "RequestAuthenticate"},
 	{ContainerListUpdate, "ContainerListUpdate"},
 	{ContainerAddUpdate, "ContainerAddUpdate"},
+	{ContainerRestrictUpdate, "ContainerRestrictUpdate"},
 	{HeadRetrieved, "HeadRetrieved"},
 	{ContainerRemoveUpdate, "ContainerRemoveUpdate"},
 	{ObjectAddUpdate, "ObjectAddUpdate"},

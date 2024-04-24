@@ -3,7 +3,7 @@ package container
 import (
 	"context"
 	"crypto/ecdsa"
-	"encoding/json"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"github.com/configwizard/sdk/database"
@@ -14,12 +14,12 @@ import (
 	"github.com/configwizard/sdk/utils"
 	"github.com/configwizard/sdk/waitgroup"
 	"github.com/nspcc-dev/neo-go/pkg/wallet"
-	v2Container "github.com/nspcc-dev/neofs-api-go/v2/container"
 	"github.com/nspcc-dev/neofs-sdk-go/bearer"
 	"github.com/nspcc-dev/neofs-sdk-go/client"
 	"github.com/nspcc-dev/neofs-sdk-go/container"
 	"github.com/nspcc-dev/neofs-sdk-go/container/acl"
 	cid "github.com/nspcc-dev/neofs-sdk-go/container/id"
+	neofsecdsa "github.com/nspcc-dev/neofs-sdk-go/crypto/ecdsa"
 	"github.com/nspcc-dev/neofs-sdk-go/eacl"
 	"github.com/nspcc-dev/neofs-sdk-go/netmap"
 	"github.com/nspcc-dev/neofs-sdk-go/object"
@@ -34,6 +34,7 @@ import (
 
 type ContainerAction interface {
 	Head(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error
+	Restrict(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error
 	Create(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error
 	Read(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error
 	List(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error
@@ -61,9 +62,10 @@ type ContainerParameter struct {
 	//objectEmitter is used for sending an update of the state of the object's action, e.g send a message that an object has been downloaded.
 	//the emitter will be responsible for keeping the UI update on changes. It is not responsible for uniqueness etc
 	ContainerEmitter emitter.Emitter
-	Attrs            []v2Container.Attribute
+	Attrs            map[string]string
 	ActionOperation  eacl.Operation
 	ExpiryEpoch      uint64
+	EACL             EACLTable
 }
 
 func (c ContainerParameter) Read(p []byte) (n int, err error) {
@@ -118,15 +120,108 @@ func (c ContainerParameter) Pool() *pool.Pool {
 	return c.Pl
 }
 
+type EACLTable struct {
+	ContainerId string   `json:"cid"`
+	Records     []Record `json:"records"`
+}
+
+type Record struct {
+	Action    eacl.Action    `json:"action"`
+	Operation eacl.Operation `json:"operation"`
+	Filters   []eacl.Filter  `json:"filters"`
+	Targets   []Target       `json:"targets"`
+}
+type Target struct {
+	Role       eacl.Role `json:"role"`
+	PublicKeys []string  `json:"publicKeys"`
+}
+
+func DefaultContainerRestrictionTable(cnrID string) (eacl.Table, error) {
+	var cnrId cid.ID
+	if err := cnrId.DecodeString(cnrID); err != nil {
+		return eacl.Table{}, err
+	}
+	// set EACL denying WRITE access to OTHERS
+	eACL := eacl.CreateTable(cnrId)
+	denyOpToOthers(eACL, eacl.OperationPut)
+	denyOpToOthers(eACL, eacl.OperationDelete)
+	return *eACL, nil
+}
+
+// make a neoFS native eacl table from the view table
+func ConvertEACLTableToNeoEAcl(eaclTable EACLTable) (*eacl.Table, error) {
+	fmt.Printf("converting %+v\r\n", eaclTable)
+	var cid cid.ID
+	if err := cid.DecodeString(eaclTable.ContainerId); err != nil {
+		return nil, fmt.Errorf("invalid container ID: %w", err)
+	}
+	nativeTable := eacl.CreateTable(cid)
+	for _, rec := range eaclTable.Records {
+		r := eacl.CreateRecord(rec.Action, rec.Operation)
+		var targets []eacl.Target
+		for _, t := range rec.Targets { //handles the targets on the record automatically
+			newTarget := eacl.NewTarget()
+			newTarget.SetRole(t.Role)
+			var keys []*ecdsa.PublicKey
+			for _, p := range t.PublicKeys {
+				bPubKey, _ := hex.DecodeString(p)
+				var pubKey neofsecdsa.PublicKey
+				if err := pubKey.Decode(bPubKey); err != nil {
+					fmt.Println("error decoding key ", err)
+					return nil, err
+				}
+				publicKey := ecdsa.PublicKey(pubKey)
+				keys = append(keys, &publicKey)
+			}
+			eacl.SetTargetECDSAKeys(newTarget, keys...)
+			targets = append(targets, *newTarget)
+		}
+		r.SetTargets(targets...)
+		nativeTable.AddRecord(r)
+	}
+	fmt.Printf("native table is %+v\r\n", nativeTable)
+	return nativeTable, nil
+}
+func ConvertNativeToEACLTable(nativeTable eacl.Table) (EACLTable, error) {
+	containerID, isSet := nativeTable.CID()
+	if !isSet {
+		return EACLTable{}, errors.New("no container ID")
+	}
+	eaclTable := EACLTable{
+		ContainerId: containerID.String(),
+	}
+	for _, r := range nativeTable.Records() { // Assuming Records method that returns []eacl.Record
+		record := Record{
+			Action:    r.Action(),
+			Operation: r.Operation(),
+			Filters:   r.Filters(), // Assuming Filters method
+		}
+		for _, t := range r.Targets() { // Assuming Targets method that returns []eacl.Target
+			target := Target{
+				Role: t.Role(),
+			}
+			for _, key := range t.BinaryKeys() {
+				target.PublicKeys = append(target.PublicKeys, hex.EncodeToString(key))
+			}
+			record.Targets = append(record.Targets, target)
+		}
+		if len(record.Targets) > 0 { //lets get rid of invalid targets
+			eaclTable.Records = append(eaclTable.Records, record)
+		}
+	}
+	return eaclTable, nil
+}
+
 type Container struct {
-	Name       string            `json:"name"`
-	BasicACL   uint32            `json:"basicACL"`
-	Id         string            `json:"id"`
-	Attributes map[string]string `json:"attributes"`
-	Size       float64           `json:"size"`
-	DomainName string            `json:"domainName"`
-	DomainZone string            `json:"domainZone"`
-	CreatedAt  time.Time         `json:"CreatedAt"`
+	Name        string            `json:"name"`
+	BasicACL    uint32            `json:"basicACL"`
+	ExtendedACL EACLTable         `json:"extended_acl"`
+	Id          string            `json:"id"`
+	Attributes  map[string]string `json:"attributes"`
+	Size        float64           `json:"size"`
+	DomainName  string            `json:"domainName"`
+	DomainZone  string            `json:"domainZone"`
+	CreatedAt   int64             `json:"CreatedAt"`
 }
 type ContainerCaller struct {
 	Id        string // Identifier for the object
@@ -147,9 +242,15 @@ func (o *ContainerCaller) SetStore(store database.Store) {
 	o.Store = store
 }
 func (o *ContainerCaller) Delete(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error {
-	tok, ok := token.(*tokens.ContainerSessionToken)
-	if !ok {
-		return errors.New(utils.ErrorNoToken)
+	var sessionToken *session.Container
+	if tok, ok := token.(*tokens.ContainerSessionToken); !ok {
+		if tok, ok := token.(*tokens.PrivateContainerSessionToken); !ok {
+			return errors.New(utils.ErrorNoToken)
+		} else {
+			sessionToken = tok.SessionToken
+		}
+	} else {
+		sessionToken = tok.SessionToken
 	}
 	var cnrId cid.ID
 	fmt.Println("decoding ", p.Id)
@@ -162,7 +263,7 @@ func (o *ContainerCaller) Delete(wg *waitgroup.WG, ctx context.Context, p Contai
 		return err
 	}
 	deleter := client.PrmContainerDelete{}
-	deleter.WithinSession(*tok.SessionToken)
+	deleter.WithinSession(*sessionToken)
 	sdkCli, err := p.Pl.RawClient()
 	if err != nil {
 		return err
@@ -203,15 +304,18 @@ func (o *ContainerCaller) Delete(wg *waitgroup.WG, ctx context.Context, p Contai
 		notification.ActionNotification)
 	return nil
 }
-func (o *ContainerCaller) Create(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error {
-	tok, ok := token.(*tokens.ContainerSessionToken)
-	if !ok {
-		return errors.New(utils.ErrorNoToken)
-	}
-	j, _ := json.MarshalIndent(tok, "", " ")
-	fmt.Printf("verified %s\n", j)
-	fmt.Printf("table %+v\r\n", tok)
 
+func (o *ContainerCaller) Create(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error {
+	var sessionToken *session.Container
+	if tok, ok := token.(*tokens.ContainerSessionToken); !ok {
+		if tok, ok := token.(*tokens.PrivateContainerSessionToken); !ok {
+			return errors.New(utils.ErrorNoToken)
+		} else {
+			sessionToken = tok.SessionToken
+		}
+	} else {
+		sessionToken = tok.SessionToken
+	}
 	const strPolicy = `REP 1`
 	var storagePolicy netmap.PlacementPolicy
 	err := storagePolicy.DecodeString(strPolicy)
@@ -219,14 +323,14 @@ func (o *ContainerCaller) Create(wg *waitgroup.WG, ctx context.Context, p Contai
 		return err
 	}
 	putter := client.PrmContainerPut{}
-	putter.WithinSession(*tok.SessionToken)
+	putter.WithinSession(*sessionToken)
 	userID := user.ResolveFromECDSAPublicKey(p.PublicKey)
-	fmt.Println("issue check:", session.IssuedBy(*tok.SessionToken, userID))
+	fmt.Println("issue check:", session.IssuedBy(*sessionToken, userID))
 	var cnr container.Container
 	cnr.Init()
 	cnr.SetOwner(userID)
 	creationTime := time.Now()
-	cnr.SetBasicACL(acl.PublicRWExtended) //(p.Permission) //acl.PublicRWExtended)
+	cnr.SetBasicACL(p.Permission) //(p.Permission) //acl.PublicRWExtended)
 	cnr.SetCreationTime(creationTime)
 
 	var rd netmap.ReplicaDescriptor
@@ -237,14 +341,15 @@ func (o *ContainerCaller) Create(wg *waitgroup.WG, ctx context.Context, p Contai
 	pp.AddReplicas(rd)
 
 	cnr.SetPlacementPolicy(storagePolicy)
-
-	var containerAttributes = make(map[string]string) //todo shift this up to the javascript side
 	//this should set user specific attributes and not default attributes. I.e block attributes that are 'reserved
-	for k, v := range containerAttributes {
+	for k, v := range p.Attrs {
+		if k == "" || v == "" {
+			continue
+		}
 		cnr.SetAttribute(k, v)
 	}
 	fmt.Println("time check ", creationTime, fmt.Sprint(creationTime.Unix()), strconv.FormatInt(time.Now().Unix(), 10))
-	createdAt := time.Now()
+	createdAt := time.Now().Unix()
 	cnr.SetName(p.Description) //name
 	if err := client.SyncContainerWithNetwork(p.Ctx, &cnr, p.Pl); err != nil {
 		fmt.Println("sync container with the network state: %s", err)
@@ -277,10 +382,11 @@ func (o *ContainerCaller) Create(wg *waitgroup.WG, ctx context.Context, p Contai
 			notification.ActionNotification)
 		return err
 	}
+
 	localContainer := Container{
 		Name:       p.Name(),
 		Id:         idCnr.String(),
-		Attributes: containerAttributes, //make(map[string]string),
+		Attributes: p.Attrs,
 		BasicACL:   uint32(p.Permission),
 		//DomainName: remoteContainer.ReadDomain().Name(), //fixme = domains
 		//DomainZone: remoteContainer.ReadDomain().Zone(),
@@ -301,7 +407,57 @@ func (o *ContainerCaller) Create(wg *waitgroup.WG, ctx context.Context, p Contai
 		notification.ActionNotification)
 	return nil
 }
+func (o *ContainerCaller) Restrict(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error {
+	var cnrId cid.ID
+	fmt.Println("decoding ", p.Id)
+	if err := cnrId.DecodeString(p.Id); err != nil {
+		actionChan <- o.Notification(
+			"failed to decode container Id",
+			err.Error(),
+			notification.Error,
+			notification.ActionNotification)
+		return err
+	}
+	var sessionToken *session.Container
+	if tok, ok := token.(*tokens.ContainerSessionToken); !ok {
+		if tok, ok := token.(*tokens.PrivateContainerSessionToken); !ok {
+			return errors.New(utils.ErrorNoToken)
+		} else {
+			sessionToken = tok.SessionToken
+		}
+	} else {
+		sessionToken = tok.SessionToken
+	}
 
+	eaclTable, err := ConvertEACLTableToNeoEAcl(p.EACL)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("writing eacl table %+v\r\n", eaclTable)
+	var setEACLOpts client.PrmContainerSetEACL
+	setEACLOpts.WithinSession(*sessionToken)
+
+	sdkCli, err := p.Pl.RawClient()
+	if err != nil {
+		return err
+	}
+
+	setEACLWaiter := waiter.NewContainerSetEACLWaiter(sdkCli, time.Second)
+
+	ctx, cancel := context.WithTimeout(p.Ctx, 120*time.Second)
+	defer cancel()
+	gateSigner := user.NewAutoIDSignerRFC6979(p.GateAccount.PrivateKey().PrivateKey) //fix me is this correct signer?
+	err = setEACLWaiter.ContainerSetEACL(ctx, *eaclTable, gateSigner, setEACLOpts)
+	if err != nil {
+		return err
+	}
+	actionChan <- o.Notification(
+		"container restricted",
+		cnrId.String(),
+		notification.Success,
+		notification.ActionToast)
+	return nil
+}
 func (o *ContainerCaller) Head(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, _ tokens.Token) error {
 	var cnrId cid.ID
 	fmt.Println("decoding ", p.Id)
@@ -323,6 +479,13 @@ func (o *ContainerCaller) Head(wg *waitgroup.WG, ctx context.Context, p Containe
 			notification.ActionNotification)
 		return err
 	}
+	sdkCli, err := p.Pl.RawClient()
+	if err != nil {
+		fmt.Println("could not retrieve pool client ", err)
+		return err
+	}
+
+	//t, err := time.Parse(time.RFC3339, remoteContainer.CreatedAt().Unix())
 	//head is going to send a container object, just this time with the content populated
 	localContainer := Container{
 		BasicACL:   remoteContainer.BasicACL().Bits(),
@@ -331,12 +494,31 @@ func (o *ContainerCaller) Head(wg *waitgroup.WG, ctx context.Context, p Containe
 		Attributes: make(map[string]string),
 		DomainName: remoteContainer.ReadDomain().Name(),
 		DomainZone: remoteContainer.ReadDomain().Zone(),
-		CreatedAt:  remoteContainer.CreatedAt(),
+		CreatedAt:  remoteContainer.CreatedAt().Unix(),
 	}
 	remoteContainer.IterateAttributes(func(k string, v string) {
 		fmt.Println("populating for ", k, v)
 		localContainer.Attributes[k] = v
 	})
+	containerEACL, err := sdkCli.ContainerEACL(ctx, cnrId, client.PrmContainerEACL{})
+	if err == nil {
+
+	} else {
+		containerEACL = *eacl.CreateTable(cnrId)
+	}
+	marshal, _ := containerEACL.Marshal()
+	marshalJSON, _ := containerEACL.MarshalJSON()
+	fmt.Printf("eacl table %+v marshal %+v marshalJSON %+v", containerEACL, marshal, string(marshalJSON))
+	table, err := ConvertNativeToEACLTable(containerEACL)
+	if err != nil {
+		return err
+	}
+	fmt.Println("HEAD RETRIEVING eacl table ", table)
+	//byt, err := json.Marshal(*table)
+	//if err != nil {
+	//	return err
+	//}
+	localContainer.ExtendedACL = table
 	//todo == this can use the same mechanism (ContainerAddUpdate) as it can supply a full object that just overwrites any existing entry.
 	if err := p.ContainerEmitter.Emit(ctx, emitter.ContainerAddUpdate, localContainer); err != nil {
 		actionChan <- o.Notification(

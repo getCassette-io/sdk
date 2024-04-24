@@ -3,7 +3,6 @@ package object
 import (
 	"context"
 	"crypto/ecdsa"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/configwizard/sdk/database"
@@ -255,11 +254,14 @@ func (o *ObjectCaller) Delete(wg *waitgroup.WG, ctx context.Context, p payload.P
 		return errors.New("no object parameters")
 	}
 	var prmDelete client.PrmObjectDelete
-	if tok, ok := token.(*tokens.BearerToken); ok {
-		//todo - this could be nil and cause an issue:
-		prmDelete.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
+	if tok, ok := token.(*tokens.BearerToken); !ok {
+		if tok, ok := token.(*tokens.PrivateBearerToken); !ok {
+			return errors.New("no bearer token provided")
+		} else {
+			prmDelete.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
+		}
 	} else {
-		return errors.New("no bearer token provided")
+		prmDelete.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
 	}
 	gateSigner := user.NewAutoIDSignerRFC6979(gA.PrivateKey().PrivateKey)
 	ctx, _ = context.WithTimeout(ctx, 60*time.Second)
@@ -462,6 +464,7 @@ func InitWriter(ctx context.Context, p *ObjectParameter, token tokens.Token) (io
 	var timestampAttr object.Attribute
 	timestampAttr.SetKey(object.AttributeTimestamp)
 	timestampAttr.SetValue(strconv.FormatInt(time.Now().Unix(), 10))
+
 	p.Attrs = append(p.Attrs, timestampAttr)
 
 	hdr.SetAttributes(p.Attrs...)
@@ -533,9 +536,9 @@ func (o ObjectCaller) Create(wg *waitgroup.WG, ctx context.Context, p payload.Pa
 		fmt.Println("ERROR Signature not verified!!!")
 		return errors.New("TOKEN IS NOT VERIFIED!!!!")
 	} else {
-		j, _ := json.MarshalIndent(bearerToken, "", " ")
-		fmt.Printf("verified %s\n", j)
-		fmt.Printf("table %+v\r\n", bearerToken.EACLTable())
+		//j, _ := json.MarshalIndent(bearerToken, "", " ")
+		//fmt.Printf("verified %s\n", j)
+		//fmt.Printf("table %+v\r\n", bearerToken.EACLTable())
 	}
 
 	var payloadWriter *slicer.PayloadWriter

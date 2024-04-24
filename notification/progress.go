@@ -36,7 +36,16 @@ func (m UIProgressEvent) Emit(c context.Context, message emitter.EventMessage, p
 	return nil
 }
 
+type ProgressDetail string
+
+const (
+	ProgressUploading   ProgressDetail = "uploading"
+	ProgressDownloading ProgressDetail = "downloading"
+	ProgressFinalising  ProgressDetail = "finalising"
+)
+
 type ProgressMessage struct {
+	Key          string
 	Title        string
 	Progress     int
 	BytesWritten int64
@@ -45,6 +54,7 @@ type ProgressMessage struct {
 	ExpectedSize int64
 	Show         bool
 	Error        string
+	Detail       ProgressDetail
 }
 
 type ProgressHandlerFactory func(ctx context.Context, w io.Writer, name string, logger *log.Logger) ProgressHandler

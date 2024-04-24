@@ -142,7 +142,7 @@ func (w RawAccount) Sign(p payload.Payload) error {
 	//pKeySgtring := hex.EncodeToString(elliptic.MarshalCompressed(elliptic.P256(), exampel.X, exampel.Y))
 	p.Signature.HexPublicKey = w.PublicKey
 	//p.OutgoingData = signed //fixme: total hack. This is not how this field should be used
-	return w.emitter.Emit(context.Background(), emitter.RequestSign, p)
+	return w.emitter.Emit(w.Ctx, emitter.RequestSign, p)
 }
 
 func (w RawAccount) PublicKeyHexString() string {
@@ -432,10 +432,11 @@ func (c *Controller) LoadSession(wallet Account) { //todo - these fields may not
 
 // RequestSign asks the wallet to begin the signing process. This assumes signing is asynchronous
 func (c *Controller) SignRequest(p payload.Payload) error {
-	c.logger.Println("c.wallet SignRequest", c.wallet)
+
 	if c.wallet == nil {
 		return errors.New(utils.ErrorNoSession)
 	}
+	c.logger.Println("c.wallet SignRequest", c.wallet, " - ", utils.GetCallerFunctionName())
 	if _, ok := c.pendingEvents[payload.UUID(p.Uid)]; ok {
 		//exists. end
 		return errors.New(utils.ErrorPendingInUse)
@@ -496,6 +497,7 @@ func (c *Controller) UpdateFromWalletConnect(signedPayload payload.Payload) erro
 }
 
 func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Context, cancelCtx context.CancelFunc, p payload.Parameters, action ContainerActionType) error {
+	fmt.Printf("performing container action  %T -- %s\r\n", action, utils.GetCallerFunctionName())
 	defer cancelCtx()
 	var actionChan = make(chan notification.NewNotification)
 	// here we check whether we should run the action directly (for whatever reason)
@@ -634,7 +636,6 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 			return err
 		}
 	} else {
-		fmt.Println("creating a bearer token for container retrieval")
 		nodes := utils.RetrieveStoragePeers(c.selectedNetwork)
 		//todo - this all needs sorted
 		//this can then probably move to the token manager now to create a new token.
@@ -688,11 +689,13 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 				} else {
 					return
 				}
+				//fixme - are we signing the token multiple times here??
 				if err := token.Sign(c.wallet.Address(), latestPayload); err != nil {
 					c.logger.Println("1. container error signing token ", err, c.wallet.Address(), latestPayload)
 					return
 				}
-				token.SetSignature(*latestPayload.Signature) //fix me - get rid of this and the getter
+				//all tokens need to do this somewhere, so can do here.
+				token.SetSignature(*latestPayload.Signature)
 				//attach the signature we received to the token. It may be used to create signers later.
 				if containerParameters.Session {
 					//todo - is it possible that by the time we add the token and sign it, we haven't
@@ -703,10 +706,17 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 					c.TokenManager.AddBearerToken(c.Account().Address(), cnrId.String(), token) //listing container contents is done with a bearer
 				}
 				if act, exists := c.containerActionMap[payload.UUID(latestPayload.Uid)]; exists {
-					if err := token.Sign(c.wallet.Address(), latestPayload); err != nil {
-						c.logger.Println("2. container error signing token ", err, c.wallet.Address(), latestPayload)
+					if err := act(wg, ctx, containerParameters, actionChan, token); err != nil {
+						//handle the error with the UI (n)
+						c.logger.Println("error executing action ", err)
 						return
 					}
+					delete(c.containerActionMap, payload.UUID(neoFSPayload.Uid)) // Clean up
+					//if err := token.Sign(c.wallet.Address(), latestPayload); err != nil {
+					//	c.logger.Println("2. container error signing token ", err, c.wallet.Address(), latestPayload)
+					//	return
+					//}
+					//token.SetSignature(*latestPayload.Signature)
 					//var t any  // Declare 't' as an empty interface to hold the cast token
 					//
 					//switch c.TokenManager.Type() {
@@ -754,12 +764,6 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 					//	}
 					//	fmt.Println("token passed verification. Attemping container action.")
 					//}
-					if err := act(wg, ctx, containerParameters, actionChan, token); err != nil {
-						//handle the error with the UI (n)
-						c.logger.Println("error executing action ", err)
-						return
-					}
-					delete(c.objectActionMap, payload.UUID(neoFSPayload.Uid)) // Clean up
 				}
 			}
 		}

@@ -2,7 +2,6 @@ package object
 
 import (
 	"context"
-	"fmt"
 	"github.com/configwizard/sdk/config"
 	"github.com/configwizard/sdk/payload"
 	"github.com/nspcc-dev/neofs-sdk-go/bearer"
@@ -81,7 +80,7 @@ func ObjectBearerToken(cnrID cid.ID, p payload.Parameters, nodes []config.Peer) 
 		tab.AddRecord(r)
 	}
 	bearerToken.SetEACLTable(tab)
-	marshaled := bearerToken.Marshal()
-	fmt.Println("created marshaled ", string(marshaled))
+	//marshaled := bearerToken.Marshal()
+	//fmt.Println("created marshaled ", string(marshaled))
 	return bearerToken, nil
 }

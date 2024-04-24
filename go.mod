@@ -8,6 +8,8 @@ require (
 	github.com/charmbracelet/bubbles v0.17.1
 	github.com/charmbracelet/bubbletea v0.25.0
 	github.com/charmbracelet/lipgloss v0.9.1
+	github.com/disintegration/imaging v1.6.2
+	github.com/gen2brain/go-fitz v1.23.7
 	github.com/google/uuid v1.5.0
 	github.com/jdxyw/generativeart v0.0.0-20220127024657-50049f153090
 	github.com/machinebox/progress v0.2.0
