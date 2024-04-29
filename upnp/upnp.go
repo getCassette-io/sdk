@@ -22,7 +22,9 @@ func expose(ctx context.Context, port uint16, desc string) (*upnp.IGD, error) {
 	if err != nil {
 		return nil, err
 	}
+	fmt.Println("external ip is ", ip)
 	return d, nil
+
 }
 
 func main() {

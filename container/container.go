@@ -371,6 +371,7 @@ func (o *ContainerCaller) Create(wg *waitgroup.WG, ctx context.Context, p Contai
 		"creating container "+p.Name(),
 		notification.Spinner,
 		notification.ActionNotification)
+
 	idCnr, err := wait.ContainerPut(ctx, cnr, gateSigner, putter)
 	fmt.Println("id ", idCnr, "err ", err)
 	if err != nil {
