@@ -21,7 +21,12 @@ import (
 	"github.com/configwizard/sdk/wallet"
 	"github.com/google/uuid"
 	"github.com/nspcc-dev/neo-go/pkg/crypto/keys"
+	"github.com/nspcc-dev/neo-go/pkg/encoding/address"
 	"github.com/nspcc-dev/neo-go/pkg/encoding/fixedn"
+	"github.com/nspcc-dev/neo-go/pkg/rpcclient"
+	"github.com/nspcc-dev/neo-go/pkg/rpcclient/actor"
+	"github.com/nspcc-dev/neo-go/pkg/rpcclient/gas"
+	"github.com/nspcc-dev/neo-go/pkg/rpcclient/nep17"
 	"github.com/nspcc-dev/neo-go/pkg/util"
 	neoWallet "github.com/nspcc-dev/neo-go/pkg/wallet"
 	wal "github.com/nspcc-dev/neo-go/pkg/wallet"
@@ -610,7 +615,7 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 	c.logger.Println("created responsechannel ", neoFSPayload.ResponseCh)
 	// Store the action in the map
 	c.containerActionMap[payload.UUID(neoFSPayload.Uid)] = action
-	//key := c.TokenManager.GateKey()
+	//keƒy := c.TokenManager.GateKey()
 	//fixme we need to use tokens if they already exist but...
 	iAt, exp, err := gspool.TokenExpiryValue(ctx, c.Pl, 100)
 
@@ -1007,6 +1012,83 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 // fixme - this might want to return more information
 func (c *Controller) NetworkInformation() string {
 	return utils.RetrieveNetworkFileSystemAddress(c.selectedNetwork)
+}
+
+type privTmpEvent struct {
+	TxId *string
+	c    *Controller
+}
+
+func (t privTmpEvent) Emit(ctx context.Context, message emitter.EventMessage, pld any) error {
+	if p, ok := pld.(payload.Payload); !ok {
+		return errors.New("not a signable payload")
+	} else {
+		bSig, err := hex.DecodeString(p.Signature.HexSignature)
+		if err != nil {
+			fmt.Println("error decoding hex signature", err)
+			return err
+		}
+		txId, err := t.c.ConcludeTransaction(p.MetaData, bSig)
+		if err != nil {
+			return err
+		}
+		t.TxId = &txId
+	}
+
+	return nil
+}
+func (c *Controller) PrivateTopUp(amount float64) error {
+	//pld, err := c.InitGasTransfer(c.NetworkInformation(), amount)
+	//if err != nil {
+	//	return err
+	//}
+	//
+	//var txId string
+	//var tmpEmitter = privTmpEvent{
+	//	&txId,
+	//	c,
+	//}
+	if rawWallet, ok := c.wallet.(RawAccount); ok {
+		//rawWallet.SetEmitter(tmpEmitter)
+		//rawWallet.Sign(pld)
+		//rawWallet.
+
+		cli, err := rpcclient.New(context.Background(), utils.RetrieveRPCNodes(c.selectedNetwork)[0], rpcclient.Options{})
+		if err != nil {
+			fmt.Println("1 ", err)
+			return err
+		}
+		fmt.Printf("rawWallet.Accoutn %+v\r\n", rawWallet.Account)
+		a, err := actor.NewSimple(cli, rawWallet.Account)
+		if err != nil {
+			fmt.Println("2 ", err)
+			return err
+		}
+		n17 := nep17.New(a, gas.Hash)
+
+		tgtAcc, err := address.StringToUint160(c.NetworkInformation())
+		if err != nil {
+			fmt.Println("3 ", err)
+			return err
+		}
+		txid, u, err := n17.Transfer(a.Sender(), tgtAcc, big.NewInt(int64(amount)), nil)
+		if err != nil {
+			fmt.Println("4 ", err)
+			return err
+		}
+		stateResponse, err := a.Wait(txid, u, err)
+		if err != nil {
+			fmt.Println("5 ", err)
+			return err
+		}
+		fmt.Printf("events %s %+v\r\n", txid, stateResponse.Events)
+		fmt.Printf("stack %s %+v\r\n", txid, stateResponse.Stack)
+		fmt.Printf("fault %s exception %+v\r\n", txid, stateResponse.FaultException)
+		fmt.Printf("vm state %s %+v\r\n", txid, stateResponse.VMState)
+		fmt.Println("transaction ID", txid.StringLE())
+	}
+
+	return nil
 }
 
 // InitGasTransfer crafts the transaction but does not sign it.  A wallet must now sign it and call ConcludeTranscation.

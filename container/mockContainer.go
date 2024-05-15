@@ -59,10 +59,10 @@ func (o *MockContainer) Head(wg *waitgroup.WG, ctx context.Context, p ContainerP
 		return err
 	}
 	actionChan <- o.Notification(
-		"container head retrieved!",
+		"container head retrieved",
 		"container "+p.Id+" head retrieved",
 		notification.Success,
-		notification.ActionNotification)
+		notification.ActionNOOP)
 	return nil
 }
 

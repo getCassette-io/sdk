@@ -212,24 +212,7 @@ func (o *ObjectCaller) Head(wg *waitgroup.WG, ctx context.Context, p payload.Par
 	}
 	checksum, _ := hdr.PayloadChecksum()
 	localObject.Attributes[payloadChecksumHeader] = checksum.String()
-	//if filename, ok := localObject.Attributes[object.AttributeFileName]; ok {
-	//	localObject.Name = filename
-	//	localObject.Attributes[payloadFileType] = strings.TrimPrefix(filepath.Ext(filename), ".")
-	//} else {
-	//	localObject.Attributes[payloadFileType] = "" //delete this an check undefined on attributes frontend?, localObject.Attributes) // = "" //breaking changer from "X_EXT"
-	//}
-	//if timestamp, ok := localObject.Attributes[object.AttributeTimestamp]; ok {
-	//	//strconv.FormatInt(time.Now().Unix(), 10)
-	//	i, err := strconv.ParseInt(timestamp, 10, 64)
-	//	if err != nil {
-	//		panic(err)
-	//	}
-	//	tm := time.UnixMilli(i)
-	//	localObject.CreatedAt = tm //might want to keep this as unix and display on frontend
-	//}
-	//if contentType, ok := localObject.Attributes[object.AttributeContentType]; ok {
-	//	localObject.ContentType = contentType
-	//}
+
 	fmt.Printf("received header object from pool %s -- %+v\r\n", reflect.TypeOf(hdr).String(), localObject)
 	//sends this wherever it needs to go. If this is needed somewhere else in the app, then a closure can allow this to be accessed elsewhere in a routine.
 	return params.ObjectEmitter.Emit(ctx, emitter.ObjectAddUpdate, localObject)
@@ -269,8 +252,8 @@ func (o *ObjectCaller) Delete(wg *waitgroup.WG, ctx context.Context, p payload.P
 		actionChan <- o.Notification(
 			"delete failed",
 			"object "+p.ID()+" failed to delete "+err.Error(),
-			notification.Success,
-			notification.ActionNotification)
+			notification.Error,
+			notification.ActionToast)
 		return err
 	} else {
 		localObject := Object{
@@ -385,18 +368,17 @@ func (o ObjectCaller) Read(wg *waitgroup.WG, ctx context.Context, p payload.Para
 			if err == io.EOF {
 				fmt.Println("reached end of file")
 				actionChan <- o.Notification(
-					"download complete!",
+					"download complete",
 					"object "+p.ID()+" completed",
 					notification.Success,
 					notification.ActionNotification)
 				break
 			}
-			fmt.Println("actual error ", err)
 			actionChan <- o.Notification(
 				"error",
 				err.Error(),
 				notification.Error,
-				notification.ActionNotification)
+				notification.ActionToast)
 			return err
 		}
 	}
@@ -456,11 +438,6 @@ func InitWriter(ctx context.Context, p *ObjectParameter, token tokens.Token) (io
 	hdr.SetCreationEpoch(ni.CurrentEpoch())
 	fmt.Println("configuring header for new object ", p.Attrs)
 
-	//var fileNameAttr object.Attribute
-	//fileNameAttr.SetKey(object.AttributeFileName)
-	//fileNameAttr.SetValue(fileStats.Name())
-	//p.Attrs = append(p.Attrs, fileNameAttr)
-
 	var timestampAttr object.Attribute
 	timestampAttr.SetKey(object.AttributeTimestamp)
 	timestampAttr.SetValue(strconv.FormatInt(time.Now().Unix(), 10))
@@ -503,7 +480,7 @@ func (o ObjectCaller) Create(wg *waitgroup.WG, ctx context.Context, p payload.Pa
 					"failed to write to buffer",
 					err.Error(),
 					notification.Error,
-					notification.ActionNotification)
+					notification.ActionToast)
 				return err
 			}
 		}
@@ -512,12 +489,11 @@ func (o ObjectCaller) Create(wg *waitgroup.WG, ctx context.Context, p payload.Pa
 
 				break
 			}
-			fmt.Println("actual error ", err)
 			actionChan <- o.Notification(
 				"error",
 				err.Error(),
 				notification.Error,
-				notification.ActionNotification)
+				notification.ActionToast)
 			return err
 		}
 	}
@@ -533,12 +509,7 @@ func (o ObjectCaller) Create(wg *waitgroup.WG, ctx context.Context, p payload.Pa
 		bearerToken = tok.BearerToken
 	}
 	if !bearerToken.VerifySignature() {
-		fmt.Println("ERROR Signature not verified!!!")
-		return errors.New("TOKEN IS NOT VERIFIED!!!!")
-	} else {
-		//j, _ := json.MarshalIndent(bearerToken, "", " ")
-		//fmt.Printf("verified %s\n", j)
-		//fmt.Printf("table %+v\r\n", bearerToken.EACLTable())
+		return errors.New("token not verified")
 	}
 
 	var payloadWriter *slicer.PayloadWriter
@@ -555,12 +526,16 @@ func (o ObjectCaller) Create(wg *waitgroup.WG, ctx context.Context, p payload.Pa
 			if errors.Is(err, &errAccess) {
 				fmt.Println("access reason:", errAccess.Error())
 			}
+			actionChan <- o.Notification(
+				"error",
+				err.Error(),
+				notification.Error,
+				notification.ActionToast)
 			fmt.Println("error closing writeCloser ", err)
 			return err
 		}
 		objectParameters.Id = payloadWriter.ID().String()
-		fmt.Println("pushing data for container ", p.ParentID())
-		fmt.Println("reached end of file, ", payloadWriter.ID())
+
 	}
 
 	fmt.Println("reached end of file, ", objectParameters.Id)
@@ -579,19 +554,6 @@ func (o ObjectCaller) Create(wg *waitgroup.WG, ctx context.Context, p payload.Pa
 		notification.ActionNotification)
 	return nil
 }
-
-//
-//// this might need to become an interface function unless we have an object manager that the controller calls.
-//func (o Object) CloseWriter(wg *sync.WaitGroup, p ObjectParameter, actionChan chan notification.NewNotification, token tokens.Token) (oid.ID, error) {
-//	if err := o.PayloadWriter.Close(); err != nil {
-//		return oid.ID{}, err
-//	}
-//	//todo: add this object to the database, once retrieved information
-//	//Id := o.PayloadWriter.ID()
-//	//p.Id = Id.String() //decoded other end. Perhaps inefficient but need to set it now so that we can retrieve its metadata
-//	//return o.Head(wg, p, actionChan, token)
-//	return o.PayloadWriter.ID(), nil
-//}
 
 type Object struct {
 	ParentID    string            `json:"parentID"`

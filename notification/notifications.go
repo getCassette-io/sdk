@@ -171,7 +171,7 @@ func (m NotificationManager) ListenAndEmit() {
 				//a notification flag should decide whether this goes to the database
 
 			case <-ticker.C:
-				fmt.Println("ListenAndEmit is still running")
+				//fmt.Println("ListenAndEmit is still running")
 			}
 		}
 	}()

@@ -405,7 +405,7 @@ func (o *ContainerCaller) Create(wg *waitgroup.WG, ctx context.Context, p Contai
 		"container "+p.Name()+" created",
 		idCnr.String(),
 		notification.Success,
-		notification.ActionNotification)
+		notification.ActionToast)
 	return nil
 }
 func (o *ContainerCaller) Restrict(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error {
@@ -477,7 +477,7 @@ func (o *ContainerCaller) Head(wg *waitgroup.WG, ctx context.Context, p Containe
 			"failed to retrieve container",
 			err.Error(),
 			notification.Error,
-			notification.ActionNotification)
+			notification.ActionToast)
 		return err
 	}
 	sdkCli, err := p.Pl.RawClient()
@@ -526,14 +526,14 @@ func (o *ContainerCaller) Head(wg *waitgroup.WG, ctx context.Context, p Containe
 			"failed to emit update",
 			err.Error(),
 			notification.Error,
-			notification.ActionNotification)
+			notification.ActionNOOP)
 		return err
 	}
 	actionChan <- o.Notification(
-		"container head retrieved!",
+		"container head retrieved",
 		"container "+p.Id+" head retrieved",
 		notification.Success,
-		notification.ActionNotification)
+		notification.ActionNOOP)
 	return nil
 }
 
@@ -568,7 +568,7 @@ func (o *ContainerCaller) List(wg *waitgroup.WG, ctx context.Context, p Containe
 		time.Sleep(100 * time.Millisecond)
 	}
 	actionChan <- o.Notification(
-		"container list complete!",
+		"container list complete",
 		"container list retrieved",
 		notification.Success,
 		notification.ActionNOOP)
@@ -602,12 +602,7 @@ func (o *ContainerCaller) Read(wg *waitgroup.WG, ctx context.Context, p Containe
 			wg.Done(wgMessage)
 			fmt.Println("[container] HEAD action completed")
 		}()
-		//var exit bool
-		//select {
-		//case <-ctx.Done():
-		//	fmt.Println("contqiner read exited")
-		//	return
-		//default:
+
 		gateSigner := user.NewAutoIDSignerRFC6979(p.GateAccount.PrivateKey().PrivateKey)
 
 		prms := client.PrmObjectSearch{}
@@ -623,7 +618,7 @@ func (o *ContainerCaller) Read(wg *waitgroup.WG, ctx context.Context, p Containe
 				"failed to list objects",
 				"could not list objects "+err.Error(),
 				notification.Error,
-				notification.ActionNotification)
+				notification.ActionToast)
 			return
 		}
 		if err = init.Iterate(func(id oid.ID) bool {
@@ -650,37 +645,13 @@ func (o *ContainerCaller) Read(wg *waitgroup.WG, ctx context.Context, p Containe
 				notification.ActionNotification)
 			return
 		}
-		//retrieveContainers := views.SimulateNeoFS(views.Containers, "") // Get the content based on the selected item
-		//for _, v := range retrieveContainers {
-		//	err := p.ContainerEmitter.Emit(ctx, string(emitter.ContainerListUpdate), v)
-		//	if err != nil {
-		//		fmt.Println("error emitting new object ", p)
-		//		actionChan <- o.Notification(
-		//			"failed to list containers",
-		//			"could not list containers "+err.Error(),
-		//			notification.Error,
-		//			notification.ActionNotification)
-		//		return
-		//	}
-		//	time.Sleep(100 * time.Millisecond)
-		//}
+
 		actionChan <- o.Notification(
-			"container object list complete!",
+			"container object list complete",
 			"object list for "+o.Id+" finished",
 			notification.Success,
 			notification.ActionNOOP)
-		//exit = true
-		//break
-		//}
-		//if exit {
-		//		actionChan <- o.Notification(
-		//			"container object list complete!",
-		//			"object list for "+o.Id+" finished",
-		//			notification.Success,
-		//			notification.ActionToast)
-		//	return
-		//}
-		//return nil
+
 	}()
 
 	return nil
