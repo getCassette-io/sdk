@@ -16,17 +16,17 @@ const TestNet Network = "testnet"
 // the status.neofs data structure
 
 type JSONData struct {
-	Status            map[string]string     `json:"status"`
-	StatusMsgs        map[string][]string   `json:"statusmsgs"`
-	NetworkEpoch      map[string]float64    `json:"network_epoch"`
-	Containers        map[string]float64    `json:"containers"`
-	Time              float64               `json:"time"`
-	NodeMap           []NodeMap             `json:"node_map"`
-	Contract          map[string]Contract   `json:"contract"`
-	Gateways          map[string][][]string `json:"gateways"`
-	SideChainRPCNodes map[string][][]string `json:"side_chain_rpc_nodes"`
-	StorageNodes      map[string][][]string `json:"storage_nodes"`
-	NeoGoRPCNodes     map[string][][]string `json:"neo_go_rpc_nodes"`
+	Status            map[string]string      `json:"status"`
+	StatusMsgs        map[string][]string    `json:"statusmsgs"`
+	NetworkEpoch      map[string]float64     `json:"network_epoch"`
+	Containers        map[string]float64     `json:"containers"`
+	Time              float64                `json:"time"`
+	NodeMap           []NodeMap              `json:"node_map"`
+	Contract          map[string]Contract    `json:"contract"`
+	Gateways          map[string][][]string  `json:"gateways"`
+	SideChainRPCNodes map[string][][]string  `json:"side_chain_rpc_nodes"`
+	StorageNodes      map[string][][]string  `json:"storage_nodes"`
+	NeoGoRPCNodes     map[string][][]RPCNode `json:"neo_go_rpc_nodes"`
 }
 
 type NodeMap struct {
@@ -53,7 +53,7 @@ type NetworkData struct {
 	Address      string
 	SidechainRPC []string
 	StorageNodes map[string]config.Peer
-	RpcNodes     []string
+	RpcNodes     []RPCNode
 }
 type NodeSelection struct {
 	Nodes   []config.Peer
@@ -87,11 +87,11 @@ func NewNetworkSelector(nodes []config.Peer) NodeSelection {
 func RetrieveStoragePeers(n Network) []config.Peer {
 	return maps.Values(networks[n].StorageNodes)
 }
-func RetrieveRPCNodes(n Network) []string {
+func RetrieveRPCNodes(n Network) []RPCNode {
 	return networks[n].RpcNodes
 }
-func RetrieveNetworkFileSystemAddress(n Network) string {
-	return networks[n].Address
+func RetrieveNetworkFileSystemAddress(n Network) NetworkData {
+	return networks[n]
 }
 
 func LoadNetworkData(jsonBytes []byte) (map[Network]NetworkData, error) {
@@ -118,7 +118,7 @@ func LoadNetworkData(jsonBytes []byte) (map[Network]NetworkData, error) {
 			}
 		}
 
-		var rpcNodes []string
+		var rpcNodes []RPCNode
 		for _, rpc := range jsonData.NeoGoRPCNodes[networkType] {
 			rpcNodes = append(rpcNodes, rpc[0]) // Assuming you want the first URL
 		}
@@ -172,8 +172,10 @@ var defaultNetworkData = map[Network]NetworkData{
 				Weight:   1,
 			},
 		},
-		RpcNodes: []string{
-			"https://rpc10.n3.nspcc.ru:10331",
+		RpcNodes: []RPCNode{{
+			HTTP: "https://rpc10.n3.nspcc.ru:10331",
+			WS:   "wss://rpc10.n3.nspcc.ru:10331/ws",
+		},
 		},
 	},
 	"testnet": {
@@ -211,8 +213,15 @@ var defaultNetworkData = map[Network]NetworkData{
 				Weight:   1,
 			},
 		},
-		RpcNodes: []string{
-			"https://rpc.t5.n3.nspcc.ru:20331",
+		RpcNodes: []RPCNode{{
+			HTTP: "https://rpc.t5.n3.nspcc.ru:20331",
+			WS:   "wss://rpc.t5.n3.nspcc.ru:20331/ws",
+		},
 		},
 	},
+}
+
+type RPCNode struct {
+	HTTP string
+	WS   string
 }

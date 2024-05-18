@@ -540,10 +540,9 @@ func (o *ContainerCaller) Head(wg *waitgroup.WG, ctx context.Context, p Containe
 // List responds with all the IDs of containers owned by the public key.
 func (o *ContainerCaller) List(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error {
 	userID := user.ResolveFromECDSAPublicKey(p.PublicKey)
-	fmt.Println("user id is....", userID)
+	fmt.Println("user listing containers", userID)
 	lst := client.PrmContainerList{}
 	lst.WithXHeaders() //fixme - dis
-	fmt.Println("getting list with ", lst)
 	r, err := p.Pl.ContainerList(ctx, userID, lst)
 	if err != nil {
 		actionChan <- o.Notification(

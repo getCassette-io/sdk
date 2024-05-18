@@ -35,7 +35,8 @@ type RPC_NETWORK string
 
 // const (
 // todo - this should move to config object
-const RPC_WEBSOCKET RPC_NETWORK = "wss://rpc.t5.n3.nspcc.ru:20331/ws" //testnet or mainnet??
+const RPC_TEST_WEBSOCKET RPC_NETWORK = "wss://rpc.t5.n3.nspcc.ru:20331/ws" //testnet or mainnet??
+const RPC_MAIN_WEBSOCKET RPC_NETWORK = "wss://rpc10.n3.nspcc.ru:10331/ws"
 
 //	RPC_TESTNET RPC_NETWORK = "https://rpc.t5.n3.nspcc.ru:20331/"
 //	RPC_MAINNET RPC_NETWORK = "https://rpc.t5.n3.nspcc.ru:20331/"
@@ -122,7 +123,7 @@ type Nep17Token struct {
 
 // decrypted account
 // fixme if we know the public key and not the recipient string....
-func CreateWCTransaction(acc *wallet.Account /* RPC_WEBSOCKET */, websocket RPC_NETWORK, recipient string, amount float64) (*transaction.Transaction, util.Uint256, error) {
+func CreateWCTransaction(acc *wallet.Account /* RPC_WEBSOCKET */, websocket string, recipient string, amount float64) (*transaction.Transaction, util.Uint256, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	wsC, err := client.NewWS(ctx, string(websocket), client.WSOptions{ //fixme - create one client for all. (not strictly necessary but we don't necessarily want to leave SubmitTransaction open forever)
@@ -164,7 +165,7 @@ func CreateWCTransaction(acc *wallet.Account /* RPC_WEBSOCKET */, websocket RPC_
 	copy(signedData[4:], h[:])
 	return unsignedTransaction, h, nil
 }
-func SubmitWCTransaction(dw *wallet.Account /* RPC_WEBSOCKET */, websocket RPC_NETWORK, transactionData, signedData []byte) (string, error) {
+func SubmitWCTransaction(dw *wallet.Account, websocket string, transactionData, signedData []byte) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	wsC, err := client.NewWS(ctx, string(websocket), client.WSOptions{
@@ -253,9 +254,63 @@ func GetNep17Balances(ctx context.Context, acc string, rpcEndpoint string) ([]Ne
 	return tokens, nil
 }
 
-//
-////TransferToken transfer Nep17 token to another wallets, for instance use address here https://testcdn.fs.neo.org/doc/integrations/endpoints/
-////simple example https://gist.github.com/alexvanin/4f22937b99990243a60b7abf68d7458c
+func TransferTokenWithPrivateKey(acc *wallet.Account, websocket string, recipient string, amount float64) (util.Uint256, uint32, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	wsC, err := client.NewWS(ctx, string(websocket), client.WSOptions{ //fixme - create one client for all. (not strictly necessary but we don't necessarily want to leave SubmitTransaction open forever)
+		Options:                        client.Options{},
+		CloseNotificationChannelIfFull: false,
+	})
+	if err != nil {
+		return util.Uint256{}, 0, err
+	}
+	err = wsC.Init()
+	if err != nil {
+		return util.Uint256{}, 0, err
+	}
+	act, err := actor.NewSimple(wsC, acc)
+	if err != nil {
+		return util.Uint256{}, 0, err
+	}
+	gasAct := gas.New(act)
+	recipientHash, err := address.StringToUint160(recipient)
+	if err != nil {
+		return util.Uint256{}, 0, err
+	}
+	decimals, err := gasAct.Decimals()
+	if err != nil {
+		return util.Uint256{}, 0, err
+	}
+	gasPrecisionAmount, err := ConvertToBigInt(amount, decimals)
+	if err != nil {
+		return util.Uint256{}, 0, err
+	}
+	version, err := wsC.GetVersion()
+	if err != nil {
+		return util.Uint256{}, 0, err
+	}
+	tx, validUntilBlock, err := gasAct.Transfer(act.Sender(), recipientHash, gasPrecisionAmount, nil)
+	stateResponse, err := waiter.New(wsC, version).Wait(tx, validUntilBlock, err)
+	if err != nil {
+		fmt.Println("waiter error ", err)
+		return util.Uint256{}, 0, err
+	}
+	if stateResponse.VMState != vmstate.Halt { //HALT is successful
+		fmt.Println("error transaction - ", stateResponse.FaultException)
+		return util.Uint256{}, 0, errors.New(utils.ErrorTransacting + " " + stateResponse.FaultException)
+	}
+
+	fmt.Printf("events %s %+v\r\n", tx, stateResponse.Events)
+	fmt.Printf("stack %s %+v\r\n", tx, stateResponse.Stack)
+	fmt.Printf("fault %s exception %+v\r\n", tx, stateResponse.FaultException)
+	fmt.Printf("vm state %s %+v\r\n", tx, stateResponse.VMState)
+	fmt.Println("transaction ID", tx.StringLE())
+	return tx /*.StringLE()*/, 0, nil
+
+}
+
+// //TransferToken transfer Nep17 token to another wallets, for instance use address here https://testcdn.fs.neo.org/doc/integrations/endpoints/
+// //simple example https://gist.github.com/alexvanin/4f22937b99990243a60b7abf68d7458c
 //func TransferToken(a *wallet.Account, amount int64, walletTo string, token util.Uint160, network RPC_NETWORK) (string, error) {
 //	ctx := context.Background()
 //	// use endpoint addresses of public RPC nodes, e.g. from https://dora.coz.io/monitor

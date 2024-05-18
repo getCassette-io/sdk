@@ -21,12 +21,7 @@ import (
 	"github.com/configwizard/sdk/wallet"
 	"github.com/google/uuid"
 	"github.com/nspcc-dev/neo-go/pkg/crypto/keys"
-	"github.com/nspcc-dev/neo-go/pkg/encoding/address"
 	"github.com/nspcc-dev/neo-go/pkg/encoding/fixedn"
-	"github.com/nspcc-dev/neo-go/pkg/rpcclient"
-	"github.com/nspcc-dev/neo-go/pkg/rpcclient/actor"
-	"github.com/nspcc-dev/neo-go/pkg/rpcclient/gas"
-	"github.com/nspcc-dev/neo-go/pkg/rpcclient/nep17"
 	"github.com/nspcc-dev/neo-go/pkg/util"
 	neoWallet "github.com/nspcc-dev/neo-go/pkg/wallet"
 	wal "github.com/nspcc-dev/neo-go/pkg/wallet"
@@ -350,7 +345,6 @@ func (c *Controller) Balances() ([]wallet.Nep17Token, error) {
 	blGet := client.PrmBalanceGet{}
 	blGet.SetAccount(user.ResolveFromECDSAPublicKey(ecdsa.PublicKey(pubKey))) //id of the current connected account
 
-	fmt.Println("waiting to retrieve result")
 	neofsGasBalance, err := c.Pl.BalanceGet(context.Background(), blGet)
 	if err != nil {
 		return nil, err
@@ -358,7 +352,7 @@ func (c *Controller) Balances() ([]wallet.Nep17Token, error) {
 	rpcNodes := utils.RetrieveRPCNodes(c.selectedNetwork)
 	var lastErr error
 	for _, node := range rpcNodes {
-		balances, err := wallet.GetNep17Balances(c.ctx, c.wallet.Address(), node)
+		balances, err := wallet.GetNep17Balances(c.ctx, c.wallet.Address(), node.HTTP)
 		if err != nil {
 			lastErr = err
 			continue // Try the next node
@@ -1010,7 +1004,7 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 }
 
 // fixme - this might want to return more information
-func (c *Controller) NetworkInformation() string {
+func (c *Controller) NetworkInformation() utils.NetworkData {
 	return utils.RetrieveNetworkFileSystemAddress(c.selectedNetwork)
 }
 
@@ -1028,67 +1022,36 @@ func (t privTmpEvent) Emit(ctx context.Context, message emitter.EventMessage, pl
 			fmt.Println("error decoding hex signature", err)
 			return err
 		}
+
 		txId, err := t.c.ConcludeTransaction(p.MetaData, bSig)
 		if err != nil {
 			return err
 		}
+		fmt.Println("txId ", txId)
 		t.TxId = &txId
 	}
 
 	return nil
 }
-func (c *Controller) PrivateTopUp(amount float64) error {
-	//pld, err := c.InitGasTransfer(c.NetworkInformation(), amount)
-	//if err != nil {
-	//	return err
-	//}
-	//
-	//var txId string
-	//var tmpEmitter = privTmpEvent{
-	//	&txId,
-	//	c,
-	//}
+func (c *Controller) PrivateTopUp(amount float64) (string, error) {
+
+	networkInfo := c.NetworkInformation()
+	recipient := networkInfo.Address
+
 	if rawWallet, ok := c.wallet.(RawAccount); ok {
-		//rawWallet.SetEmitter(tmpEmitter)
-		//rawWallet.Sign(pld)
-		//rawWallet.
+		if len(networkInfo.RpcNodes) == 0 {
+			return "", errors.New("no nodes to connect to")
+		}
+		txId, validUntilBlock, err := wallet.TransferTokenWithPrivateKey(rawWallet.Account, networkInfo.RpcNodes[0].WS, recipient, amount)
+		if err != nil {
+			return "", err
+		}
+		fmt.Println("txId ", txId.StringLE(), "valid until ", validUntilBlock)
 
-		cli, err := rpcclient.New(context.Background(), utils.RetrieveRPCNodes(c.selectedNetwork)[0], rpcclient.Options{})
-		if err != nil {
-			fmt.Println("1 ", err)
-			return err
-		}
-		fmt.Printf("rawWallet.Accoutn %+v\r\n", rawWallet.Account)
-		a, err := actor.NewSimple(cli, rawWallet.Account)
-		if err != nil {
-			fmt.Println("2 ", err)
-			return err
-		}
-		n17 := nep17.New(a, gas.Hash)
-
-		tgtAcc, err := address.StringToUint160(c.NetworkInformation())
-		if err != nil {
-			fmt.Println("3 ", err)
-			return err
-		}
-		txid, u, err := n17.Transfer(a.Sender(), tgtAcc, big.NewInt(int64(amount)), nil)
-		if err != nil {
-			fmt.Println("4 ", err)
-			return err
-		}
-		stateResponse, err := a.Wait(txid, u, err)
-		if err != nil {
-			fmt.Println("5 ", err)
-			return err
-		}
-		fmt.Printf("events %s %+v\r\n", txid, stateResponse.Events)
-		fmt.Printf("stack %s %+v\r\n", txid, stateResponse.Stack)
-		fmt.Printf("fault %s exception %+v\r\n", txid, stateResponse.FaultException)
-		fmt.Printf("vm state %s %+v\r\n", txid, stateResponse.VMState)
-		fmt.Println("transaction ID", txid.StringLE())
+		return txId.StringLE(), err
 	}
 
-	return nil
+	return "", errors.New("no raw wallet")
 }
 
 // InitGasTransfer crafts the transaction but does not sign it.  A wallet must now sign it and call ConcludeTranscation.
@@ -1105,11 +1068,12 @@ func (c *Controller) InitGasTransfer(recipientAddress string, amount float64) (p
 		return payload.Payload{}, fmt.Errorf("invalid/unsupported public key format from WalletConnect: %w", err)
 	}
 
-	fmt.Println("public key being used for transaction - ", c.Account().PublicKeyHexString())
-	//fixme - the websocket should be part of the network data
+	if len(c.NetworkInformation().RpcNodes) == 0 {
+		return payload.Payload{}, errors.New("no nodes to connect to")
+	}
 	//fixme - why are we recreating the wallet here from public key when the controller has the wallet? test both.
 	//however its this or cast the c.Account back to a wallet.Account...
-	unsignedTransaction, _, err := wallet.CreateWCTransaction(wallet.NewAccountFromPublicKey((ecdsa.PublicKey)(pubKey)), wallet.RPC_WEBSOCKET, recipientAddress, amount)
+	unsignedTransaction, _, err := wallet.CreateWCTransaction(wallet.NewAccountFromPublicKey((ecdsa.PublicKey)(pubKey)), c.NetworkInformation().RpcNodes[0].WS, recipientAddress, amount)
 	jsonTransaction, err := unsignedTransaction.MarshalJSON()
 	if err != nil {
 		return payload.Payload{}, err
@@ -1135,8 +1099,10 @@ func (c *Controller) ConcludeTransaction(transactionData, signedData []byte) (st
 	if err != nil {
 		return "", fmt.Errorf("invalid/unsupported public key format from WalletConnect: %w", err)
 	}
-
-	txId, err := wallet.SubmitWCTransaction(wallet.NewAccountFromPublicKey((ecdsa.PublicKey)(pubKey)), wallet.RPC_WEBSOCKET, transactionData, signedData)
+	if len(c.NetworkInformation().RpcNodes) == 0 {
+		return "", errors.New("no nodes to connect to")
+	}
+	txId, err := wallet.SubmitWCTransaction(wallet.NewAccountFromPublicKey((ecdsa.PublicKey)(pubKey)), c.NetworkInformation().RpcNodes[0].WS, transactionData, signedData)
 	if err != nil {
 		return "", err
 	}
