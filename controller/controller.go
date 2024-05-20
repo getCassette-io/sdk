@@ -1085,6 +1085,33 @@ func (c *Controller) InitGasTransfer(recipientAddress string, amount float64) (p
 	return p, err
 }
 
+type NetworkFees struct {
+	AuditFee          uint64 `json:"audit_fee"`
+	StoragePrice      uint64 `json:"storage_price"`
+	NamedContainerFee uint64 `json:"named_container_fee"`
+	ContainerFee      uint64 `json:"container_fee"`
+	EpochDuration     uint64 `json:"epoch_duration"`
+	MaxObjectSize     uint64 `json:"max_object_size"`
+	WithdrawalFee     uint64 `json:"withdrawal_fee"`
+}
+
+func (c *Controller) RetrieveCostInformation() (NetworkFees, error) {
+	var n NetworkFees
+	ni, err := c.Pl.NetworkInfo(c.ctx, client.PrmNetworkInfo{})
+	if err != nil {
+		return n, err
+	}
+
+	n.AuditFee = ni.AuditFee()
+	n.StoragePrice = ni.StoragePrice()
+	n.NamedContainerFee = ni.NamedContainerFee()
+	n.ContainerFee = ni.ContainerFee()
+	n.EpochDuration = ni.EpochDuration()
+	//homomorphicHashingDisabled := ni.HomomorphicHashingDisabled()
+	n.MaxObjectSize = ni.MaxObjectSize()
+	n.WithdrawalFee = ni.WithdrawalFee()
+	return n, nil
+}
 func (c *Controller) ConcludeTransaction(transactionData, signedData []byte) (string, error) {
 	//fixme - this should select the websocket url based on some parameter
 	bPubKey, err := hex.DecodeString(c.Account().PublicKeyHexString())
