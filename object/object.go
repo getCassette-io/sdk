@@ -26,7 +26,6 @@ import (
 	"github.com/nspcc-dev/neofs-sdk-go/user"
 	"io"
 	"log"
-	"reflect"
 	"strconv"
 	"time"
 )
@@ -163,7 +162,6 @@ func (o *ObjectCaller) Head(wg *waitgroup.WG, ctx context.Context, p payload.Par
 	} else {
 		prmHead.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
 	}
-	fmt.Println("p ---- ", p, p.(ObjectParameter))
 	params, ok := p.(ObjectParameter)
 	if !ok {
 		return errors.New("no object parameters")
@@ -213,7 +211,6 @@ func (o *ObjectCaller) Head(wg *waitgroup.WG, ctx context.Context, p payload.Par
 	checksum, _ := hdr.PayloadChecksum()
 	localObject.Attributes[payloadChecksumHeader] = checksum.String()
 
-	fmt.Printf("received header object from pool %s -- %+v\r\n", reflect.TypeOf(hdr).String(), localObject)
 	//sends this wherever it needs to go. If this is needed somewhere else in the app, then a closure can allow this to be accessed elsewhere in a routine.
 	return params.ObjectEmitter.Emit(ctx, emitter.ObjectAddUpdate, localObject)
 }
@@ -248,6 +245,11 @@ func (o *ObjectCaller) Delete(wg *waitgroup.WG, ctx context.Context, p payload.P
 	}
 	gateSigner := user.NewAutoIDSignerRFC6979(gA.PrivateKey().PrivateKey)
 	ctx, _ = context.WithTimeout(ctx, 60*time.Second)
+	actionChan <- o.Notification(
+		"deleting object",
+		"deleting object "+objID.String(),
+		notification.Info,
+		notification.ActionToast)
 	if _, err := p.Pool().ObjectDelete(ctx, cnrID, objID, gateSigner, prmDelete); err != nil {
 		actionChan <- o.Notification(
 			"delete failed",
@@ -357,10 +359,10 @@ func (o ObjectCaller) Read(wg *waitgroup.WG, ctx context.Context, p payload.Para
 		if n > 0 {
 			if _, err := p.Write(buf[:n]); err != nil {
 				actionChan <- o.Notification(
-					"failed to write to buffer",
+					"failed to write data",
 					err.Error(),
 					notification.Error,
-					notification.ActionNotification)
+					notification.ActionToast)
 				return err
 			}
 		}
@@ -371,7 +373,7 @@ func (o ObjectCaller) Read(wg *waitgroup.WG, ctx context.Context, p payload.Para
 					"download complete",
 					"object "+p.ID()+" completed",
 					notification.Success,
-					notification.ActionNotification)
+					notification.ActionToast)
 				break
 			}
 			actionChan <- o.Notification(
@@ -477,7 +479,7 @@ func (o ObjectCaller) Create(wg *waitgroup.WG, ctx context.Context, p payload.Pa
 		if n > 0 {
 			if _, err := p.Write(buf[:n]); err != nil {
 				actionChan <- o.Notification(
-					"failed to write to buffer",
+					"failed to write data",
 					err.Error(),
 					notification.Error,
 					notification.ActionToast)
@@ -518,7 +520,7 @@ func (o ObjectCaller) Create(wg *waitgroup.WG, ctx context.Context, p payload.Pa
 			"upload failed",
 			"object "+p.ID()+" failed to upload", //we gleaned the ID during the write initiator.
 			notification.Error,
-			notification.ActionNotification)
+			notification.ActionToast)
 		return errors.New("could retriever the writer.")
 	} else {
 		if err := payloadWriter.Close(); err != nil {
@@ -543,7 +545,6 @@ func (o ObjectCaller) Create(wg *waitgroup.WG, ctx context.Context, p payload.Pa
 		ParentID: p.ParentID(),
 		Id:       payloadWriter.ID().String(), //fixme - find out how objectParameters.ID is the old ID....
 	}
-	fmt.Println("emitting created object ", localObject)
 	if err := objectParameters.ObjectEmitter.Emit(ctx, emitter.ObjectAddUpdate, localObject); err != nil {
 		fmt.Println("could not emit add update ", err)
 	}
@@ -551,7 +552,7 @@ func (o ObjectCaller) Create(wg *waitgroup.WG, ctx context.Context, p payload.Pa
 		"upload complete!",
 		"object "+objectParameters.Id+" completed", //we gleaned the ID during the write initiator.
 		notification.Success,
-		notification.ActionNotification)
+		notification.ActionToast)
 	return nil
 }
 

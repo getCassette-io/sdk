@@ -139,10 +139,7 @@ func (m NotificationManager) Notification(title, description, typez string, acti
 }
 func (m NotificationManager) QueueNotification(notification NewNotification) {
 	notification.CreatedAt = strconv.FormatInt(time.Now().Unix(), 10)
-	fmt.Println("pushing notification ", notification)
-	fmt.Printf("Queueing notification: %v, channel len: %d, cap: %d\n", notification, len(m.notificationCh), cap(m.notificationCh))
 	m.notificationCh <- notification
-	fmt.Println("notification pushed ", notification)
 }
 
 func (m NotificationManager) ListenAndEmit() {
@@ -163,7 +160,6 @@ func (m NotificationManager) ListenAndEmit() {
 					fmt.Println("Notification channel closed, exiting ListenAndEmit")
 					return
 				}
-				fmt.Println("Notification received: ", not)
 				if err := m.Emit(m.ctx, emitter.NotificationAddMessage, not); err != nil {
 					fmt.Println("Error in Emit: ", err)
 					return

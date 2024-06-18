@@ -34,7 +34,6 @@ import (
 	"github.com/nspcc-dev/neofs-sdk-go/user"
 	"log"
 	"math/big"
-	"reflect"
 	"strconv"
 	"sync"
 	"time"
@@ -384,12 +383,10 @@ func (c *Controller) Balances() ([]wallet.Nep17Token, error) {
 
 // these kind of have to be used in harmony
 func (c *Controller) SetAccount(a Account) {
-	fmt.Println("setting account here to ", a, reflect.TypeOf(a))
 	c.wallet = a
 }
 func (c *Controller) SetSigningEmitter(em emitter.Emitter) {
 	c.Signer = em
-	fmt.Println("type of wallet here is ", reflect.TypeOf(c.wallet))
 	if wcWallet, ok := c.wallet.(WCWallet); ok {
 		wcWallet.SetEmitter(em)
 	} else if rawWallet, ok := c.wallet.(RawAccount); ok {
@@ -526,7 +523,6 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 							notification.Error,
 							notification.ActionNotification))
 					}
-					fmt.Println("WE RECEIVED [container] SUCCESS!")
 					c.logger.Println("3 closing everything down")
 					cancelCtx()
 				}
@@ -539,10 +535,7 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 	if !ok {
 		return errors.New("parameters not valid")
 	}
-	fmt.Println("Type assertion:", reflect.TypeOf(containerParameters))
-	fmt.Printf("action manager retrieved container parameters %+v\r\n", containerParameters)
 	var cnrId cid.ID
-	fmt.Println("decoding ", p.ID())
 
 	if err := cnrId.DecodeString(p.ID()); err != nil || containerParameters.Verb == 0 { //unknown verb for container unnamed
 		fmt.Println("verb is empty. We are going to just attempt the action directly.")
@@ -821,7 +814,6 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 							notification.Error,
 							notification.ActionNotification))
 					}
-					fmt.Println("WE RECEIVED [OBJECT] SUCCESS!")
 					c.logger.Println("3 closing everything down")
 					cancelCtx()
 				}
@@ -872,7 +864,6 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 			fmt.Println("operation get, but no objectparameterss. Bailing out")
 			return err
 		}
-		fmt.Printf("objectParameters Before %s - %+v\r\n", objectParameters.ActionOperation.String(), objectParameters)
 		if err := action(wg, ctx, objectParameters, actionChan, bearerToken); err != nil {
 			return err
 		}
@@ -968,7 +959,6 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 						fmt.Println("operation get, but no objectparameterss. Bailing out")
 						return
 					}
-					fmt.Printf("objectParameters Before %s - %+v\r\n", objectParameters.ActionOperation.String(), objectParameters)
 					if err := act(wg, ctx, objectParameters, actionChan, bearerToken); err != nil {
 						//handle the error with the UI (n)
 						c.logger.Println("error executing action ", err)

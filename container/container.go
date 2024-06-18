@@ -253,13 +253,12 @@ func (o *ContainerCaller) Delete(wg *waitgroup.WG, ctx context.Context, p Contai
 		sessionToken = tok.SessionToken
 	}
 	var cnrId cid.ID
-	fmt.Println("decoding ", p.Id)
 	if err := cnrId.DecodeString(p.Id); err != nil {
 		actionChan <- o.Notification(
 			"failed to decode container Id",
 			err.Error(),
 			notification.Error,
-			notification.ActionNotification)
+			notification.ActionToast)
 		return err
 	}
 	deleter := client.PrmContainerDelete{}
@@ -272,18 +271,17 @@ func (o *ContainerCaller) Delete(wg *waitgroup.WG, ctx context.Context, p Contai
 
 	wait := waiter.NewContainerDeleteWaiter(sdkCli, waiter.DefaultPollInterval)
 	ctx, _ = context.WithTimeout(p.Ctx, 60*time.Second)
-	//defer cancel()
 	actionChan <- o.Notification(
 		"deleting container",
 		"deleting container "+p.Id,
-		notification.Spinner,
-		notification.ActionNotification)
+		notification.Info,
+		notification.ActionToast)
 	if err := wait.ContainerDelete(ctx, cnrId, gateSigner, deleter); err != nil {
 		actionChan <- o.Notification(
 			"failed to delete container",
 			err.Error(),
 			notification.Error,
-			notification.ActionNotification)
+			notification.ActionToast)
 		return err
 	}
 	localContainer := Container{
@@ -294,14 +292,14 @@ func (o *ContainerCaller) Delete(wg *waitgroup.WG, ctx context.Context, p Contai
 			"failed to emit update",
 			err.Error(),
 			notification.Error,
-			notification.ActionNotification)
+			notification.ActionToast)
 		return err
 	}
 	actionChan <- o.Notification(
 		"container deleted",
 		p.Id,
 		notification.Success,
-		notification.ActionNotification)
+		notification.ActionToast)
 	return nil
 }
 
@@ -316,7 +314,7 @@ func (o *ContainerCaller) Create(wg *waitgroup.WG, ctx context.Context, p Contai
 	} else {
 		sessionToken = tok.SessionToken
 	}
-	const strPolicy = `REP 1`
+	const strPolicy = `REP 3`
 	var storagePolicy netmap.PlacementPolicy
 	err := storagePolicy.DecodeString(strPolicy)
 	if err != nil {
@@ -353,34 +351,40 @@ func (o *ContainerCaller) Create(wg *waitgroup.WG, ctx context.Context, p Contai
 	cnr.SetName(p.Description) //name
 	if err := client.SyncContainerWithNetwork(p.Ctx, &cnr, p.Pl); err != nil {
 		fmt.Println("sync container with the network state: %s", err)
+		actionChan <- o.Notification(
+			"Could not create container",
+			"Error syncing with network "+err.Error(),
+			notification.Error,
+			notification.ActionToast)
 		return err
 	}
 	gateSigner := user.NewAutoIDSignerRFC6979(p.GateAccount.PrivateKey().PrivateKey) //fix me is this correct signer?
 	sdkCli, err := p.Pl.RawClient()
 	if err != nil {
+		actionChan <- o.Notification(
+			"Could not create container",
+			"Error connecting to network "+err.Error(),
+			notification.Error,
+			notification.ActionToast)
 		return err
 	}
-	cnrJson, _ := cnr.MarshalJSON()
-	fmt.Printf("owner %+v - cnrJson %+v\r\n", cnr.Owner(), string(cnrJson))
 	wait := waiter.NewContainerPutWaiter(sdkCli, waiter.DefaultPollInterval)
 	ctx, cancel := context.WithTimeout(p.Ctx, 120*time.Second)
 	defer cancel()
-	fmt.Println("about to begin container put")
 	actionChan <- o.Notification(
 		"creating container",
 		"creating container "+p.Name(),
-		notification.Spinner,
-		notification.ActionNotification)
+		notification.Info,
+		notification.ActionToast)
 
 	idCnr, err := wait.ContainerPut(ctx, cnr, gateSigner, putter)
 	fmt.Println("id ", idCnr, "err ", err)
 	if err != nil {
-		fmt.Println("error putting container ", err)
 		actionChan <- o.Notification(
 			"failed to create container",
 			err.Error(),
 			notification.Error,
-			notification.ActionNotification)
+			notification.ActionToast)
 		return err
 	}
 
@@ -410,13 +414,12 @@ func (o *ContainerCaller) Create(wg *waitgroup.WG, ctx context.Context, p Contai
 }
 func (o *ContainerCaller) Restrict(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error {
 	var cnrId cid.ID
-	fmt.Println("decoding ", p.Id)
 	if err := cnrId.DecodeString(p.Id); err != nil {
 		actionChan <- o.Notification(
 			"failed to decode container Id",
 			err.Error(),
 			notification.Error,
-			notification.ActionNotification)
+			notification.ActionToast)
 		return err
 	}
 	var sessionToken *session.Container
@@ -434,7 +437,6 @@ func (o *ContainerCaller) Restrict(wg *waitgroup.WG, ctx context.Context, p Cont
 	if err != nil {
 		return err
 	}
-	fmt.Printf("writing eacl table %+v\r\n", eaclTable)
 	var setEACLOpts client.PrmContainerSetEACL
 	setEACLOpts.WithinSession(*sessionToken)
 
@@ -453,7 +455,7 @@ func (o *ContainerCaller) Restrict(wg *waitgroup.WG, ctx context.Context, p Cont
 		return err
 	}
 	actionChan <- o.Notification(
-		"container restricted",
+		"container permissions successfully updated",
 		cnrId.String(),
 		notification.Success,
 		notification.ActionToast)
@@ -461,13 +463,12 @@ func (o *ContainerCaller) Restrict(wg *waitgroup.WG, ctx context.Context, p Cont
 }
 func (o *ContainerCaller) Head(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, _ tokens.Token) error {
 	var cnrId cid.ID
-	fmt.Println("decoding ", p.Id)
 	if err := cnrId.DecodeString(p.Id); err != nil {
 		actionChan <- o.Notification(
 			"failed to decode container Id",
 			err.Error(),
 			notification.Error,
-			notification.ActionNotification)
+			notification.ActionToast)
 		return err
 	}
 	var prmGet client.PrmContainerGet
@@ -498,7 +499,6 @@ func (o *ContainerCaller) Head(wg *waitgroup.WG, ctx context.Context, p Containe
 		CreatedAt:  remoteContainer.CreatedAt().Unix(),
 	}
 	remoteContainer.IterateAttributes(func(k string, v string) {
-		fmt.Println("populating for ", k, v)
 		localContainer.Attributes[k] = v
 	})
 	containerEACL, err := sdkCli.ContainerEACL(ctx, cnrId, client.PrmContainerEACL{})
@@ -507,18 +507,10 @@ func (o *ContainerCaller) Head(wg *waitgroup.WG, ctx context.Context, p Containe
 	} else {
 		containerEACL = *eacl.CreateTable(cnrId)
 	}
-	marshal, _ := containerEACL.Marshal()
-	marshalJSON, _ := containerEACL.MarshalJSON()
-	fmt.Printf("eacl table %+v marshal %+v marshalJSON %+v", containerEACL, marshal, string(marshalJSON))
 	table, err := ConvertNativeToEACLTable(containerEACL)
 	if err != nil {
 		return err
 	}
-	fmt.Println("HEAD RETRIEVING eacl table ", table)
-	//byt, err := json.Marshal(*table)
-	//if err != nil {
-	//	return err
-	//}
 	localContainer.ExtendedACL = table
 	//todo == this can use the same mechanism (ContainerAddUpdate) as it can supply a full object that just overwrites any existing entry.
 	if err := p.ContainerEmitter.Emit(ctx, emitter.ContainerAddUpdate, localContainer); err != nil {
@@ -532,7 +524,7 @@ func (o *ContainerCaller) Head(wg *waitgroup.WG, ctx context.Context, p Containe
 	actionChan <- o.Notification(
 		"container head retrieved",
 		"container "+p.Id+" head retrieved",
-		notification.Success,
+		notification.Info,
 		notification.ActionNOOP)
 	return nil
 }
@@ -546,10 +538,10 @@ func (o *ContainerCaller) List(wg *waitgroup.WG, ctx context.Context, p Containe
 	r, err := p.Pl.ContainerList(ctx, userID, lst)
 	if err != nil {
 		actionChan <- o.Notification(
-			"failed to list containers",
-			"could not list containers "+err.Error(),
+			"Could not list containers",
+			err.Error(),
 			notification.Error,
-			notification.ActionNotification)
+			notification.ActionToast)
 		return err
 	}
 	//we need to now emit this list one at a time as we receive them (or as one array?)
@@ -559,22 +551,18 @@ func (o *ContainerCaller) List(wg *waitgroup.WG, ctx context.Context, p Containe
 		if err != nil {
 			fmt.Println("error emitting new object ", p)
 			actionChan <- o.Notification(
-				"failed to list containers",
+				"Could not list containers",
 				"could not list containers "+err.Error(),
 				notification.Error,
-				notification.ActionNotification)
+				notification.ActionToast)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	actionChan <- o.Notification(
-		"container list complete",
-		"container list retrieved",
-		notification.Success,
-		notification.ActionNOOP)
+
 	return nil
 }
 
-func (o *ContainerCaller) Read(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error {
+func (c *ContainerCaller) Read(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error {
 
 	//var ok bool
 	var bToken *bearer.Token
@@ -588,7 +576,6 @@ func (o *ContainerCaller) Read(wg *waitgroup.WG, ctx context.Context, p Containe
 		bToken = tok.BearerToken
 	}
 	var cnrId cid.ID
-	fmt.Println("decoding ", p.Id)
 	if err := cnrId.DecodeString(p.Id); err != nil {
 		return errors.New(utils.ErrorNotFound) //todo - more specific?
 	}
@@ -613,7 +600,7 @@ func (o *ContainerCaller) Read(wg *waitgroup.WG, ctx context.Context, p Containe
 		init, err := p.Pl.ObjectSearchInit(ctx, cnrId, gateSigner, prms)
 		if err != nil {
 			fmt.Println("err p.Pl.ObjectSearchInit", err)
-			actionChan <- o.Notification(
+			actionChan <- c.Notification(
 				"failed to list objects",
 				"could not list objects "+err.Error(),
 				notification.Error,
@@ -627,7 +614,7 @@ func (o *ContainerCaller) Read(wg *waitgroup.WG, ctx context.Context, p Containe
 			//before retrieving data about the object.
 			if err := p.ContainerEmitter.Emit(ctx, emitter.ObjectAddUpdate, object2.Object{Id: id.String(), ParentID: cnrId.String()}); err != nil {
 				fmt.Println("emitting object from iterator error ", err)
-				actionChan <- o.Notification(
+				actionChan <- c.Notification(
 					"failed to iterate objects",
 					"could not iterate objects "+err.Error(),
 					notification.Error,
@@ -637,20 +624,13 @@ func (o *ContainerCaller) Read(wg *waitgroup.WG, ctx context.Context, p Containe
 			return false
 		}); err != nil {
 			fmt.Println("error iterator ", err)
-			actionChan <- o.Notification(
+			actionChan <- c.Notification(
 				"failed to call object iterator",
 				"failed to call object iterator "+err.Error(),
 				notification.Error,
-				notification.ActionNotification)
+				notification.ActionToast)
 			return
 		}
-
-		actionChan <- o.Notification(
-			"container object list complete",
-			"object list for "+o.Id+" finished",
-			notification.Success,
-			notification.ActionNOOP)
-
 	}()
 
 	return nil
