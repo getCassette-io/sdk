@@ -528,16 +528,10 @@ func (o ObjectCaller) Create(wg *waitgroup.WG, ctx context.Context, p payload.Pa
 			if errors.Is(err, &errAccess) {
 				fmt.Println("access reason:", errAccess.Error())
 			}
-			actionChan <- o.Notification(
-				"error",
-				err.Error(),
-				notification.Error,
-				notification.ActionToast)
 			fmt.Println("error closing writeCloser ", err)
 			return err
 		}
 		objectParameters.Id = payloadWriter.ID().String()
-
 	}
 
 	fmt.Println("reached end of file, ", objectParameters.Id)

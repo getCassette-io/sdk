@@ -198,21 +198,6 @@ func (t PrivateKeyTokenManager) NewSessionToken(lIat, lNbf, lExp uint64, cnrID c
 	sessionToken.SetExp(lExp)
 
 	var issuer user.ID
-	//fmt.Println("WC sessioin token from key ", t.W.PublicKey().String())
-	//issuer = user.ResolveFromECDSAPublicKey(ecdsa.PublicKey((issuerKey))) //todo - where does this key come from?
-	//sessionToken.SetIssuer(issuer)
-	//
-	//var issuer user.ID
-	//
-	//bPubKey, err := hex.DecodeString()
-	//if err != nil {
-	//	return nil, fmt.Errorf("decode HEX public key from WalletConnect: %w", err)
-	//}
-	//var pubKey neofsecdsa.PublicKeyRFC6979
-	//err = pubKey.Decode(bPubKey)
-	//if err != nil {
-	//	return nil, fmt.Errorf("invalid/unsupported public key format from raw walelt: %w", err)
-	//}
 	issuer = user.ResolveFromECDSAPublicKey(ecdsa.PublicKey(issuerKey))
 	sessionToken.SetIssuer(issuer)
 	return &PrivateContainerSessionToken{

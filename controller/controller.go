@@ -631,7 +631,7 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 		nodes := utils.RetrieveStoragePeers(c.selectedNetwork)
 		//todo - this all needs sorted
 		//this can then probably move to the token manager now to create a new token.
-		bt, err := object.ContainerBearerToken(p, nodes) // fixme - this won't suffice for containers.
+		bt, err := object.ContainerBearerToken(p, keys.PublicKey(pubKey), nodes) // fixme - this won't suffice for containers.
 		if err != nil {
 			fmt.Println("failed to create bearer ", err)
 			return err
@@ -704,58 +704,6 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 						return
 					}
 					delete(c.containerActionMap, payload.UUID(neoFSPayload.Uid)) // Clean up
-					//if err := token.Sign(c.wallet.Address(), latestPayload); err != nil {
-					//	c.logger.Println("2. container error signing token ", err, c.wallet.Address(), latestPayload)
-					//	return
-					//}
-					//token.SetSignature(*latestPayload.Signature)
-					//var t any  // Declare 't' as an empty interface to hold the cast token
-					//
-					//switch c.TokenManager.Type() {
-					//case tokens.TypePrivateTokenManager:
-					//	// Attempt to cast 'token' to '*tokens.PrivateContainerSessionToken'
-					//	if castToken, ok := token.(*tokens.PrivateContainerSessionToken); ok {
-					//		t = castToken.SessionToken
-					//	} else if castToken, ok := token.(*tokens.PrivateBearerToken); ok {
-					//		t = castToken.BearerToken
-					//	}
-					//default:
-					//	// Attempt to cast 'token' to '*tokens.ContainerSessionToken'
-					//	if castToken, ok := token.(*tokens.ContainerSessionToken); ok {
-					//		t = castToken.SessionToken
-					//	}
-					//}
-					//// Now 't' holds the cast token, but you should check whether the casting was successful
-					//if t != nil {
-					//	// 't' is successfully cast, and you can proceed with using it
-					//	fmt.Println("verifying that the session has been signed")
-					//	if !t.VerifySignature() {
-					//		fmt.Println("verifying signature failed for container session token")
-					//		return
-					//	}
-					//	fmt.Println("token passed verification. Attemping container action.")
-					//} else {
-					//	fmt.Println("there was not available session token for the manager type")
-					//	return
-					//}
-
-					//var typ any
-					//if c.TokenManager.Type() == tokens.TypeWCTokenManager {
-					//	typ = typ.(*tokens.ContainerSessionToken)
-					//} else if c.TokenManager.Type() == tokens.TypeMockTokenManager {
-					//	typ = typ.(*tokens.ContainerSessionToken)
-					//} else if c.TokenManager.Type() == tokens.TypePrivateTokenManager {
-					//	typ = typ.(*tokens.PrivateContainerSessionToken)
-					//}
-					////check for specifically session token signing
-					//if t, ok := token.(*tokens.ContainerSessionToken); ok {
-					//	fmt.Println("verifying that the session has been signed")
-					//	if !t.SessionToken.VerifySignature() {
-					//		fmt.Println("verifying signature failed for container session token")
-					//		return
-					//	}
-					//	fmt.Println("token passed verification. Attemping container action.")
-					//}
 				}
 			}
 		}
@@ -876,10 +824,20 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 	// Store the action in the map
 	c.objectActionMap[payload.UUID(neoFSPayload.Uid)] = action
 
+	bPubKey, err := hex.DecodeString(c.wallet.PublicKeyHexString())
+	if err != nil {
+		log.Fatal("could not decode public key - ", err)
+	}
+	var pubKey neofsecdsa.PublicKeyRFC6979
+
+	err = pubKey.Decode(bPubKey)
+	if err != nil {
+		return err
+	}
 	//key := c.TokenManager.GateKey()
 	nodes := utils.RetrieveStoragePeers(c.selectedNetwork)
 	//todo - this all needs sorted
-	bt, err := object.ObjectBearerToken(cnrId, p, nodes) // fixme - this won't suffice for containers.
+	bt, err := object.ObjectBearerToken(cnrId, p, keys.PublicKey(pubKey), nodes) // fixme - this won't suffice for containers.
 	//fixme - the expiries are not set
 	//iAt, exp, err := gspool.TokenExpiryValue(ctx, c.Pl, 100)
 	//if err != nil {

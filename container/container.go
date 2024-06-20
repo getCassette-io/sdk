@@ -336,7 +336,7 @@ func (o *ContainerCaller) Create(wg *waitgroup.WG, ctx context.Context, p Contai
 
 	var pp netmap.PlacementPolicy
 	pp.SetContainerBackupFactor(1)
-	pp.AddReplicas(rd)
+	pp.SetReplicas([]netmap.ReplicaDescriptor{rd})
 
 	cnr.SetPlacementPolicy(storagePolicy)
 	//this should set user specific attributes and not default attributes. I.e block attributes that are 'reserved

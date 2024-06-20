@@ -26,13 +26,10 @@ func BuildUnsignedBearerToken(table *eacl.Table, lIat, lNbf, lExp uint64, gateKe
 
 func BuildBearerToken(key *keys.PrivateKey, table *eacl.Table, lIat, lNbf, lExp uint64, gateKey *keys.PublicKey) (*bearer.Token, error) {
 	gateID := user.ResolveFromECDSAPublicKey(*(*ecdsa.PublicKey)(gateKey)) //dereference
-
 	var bearerToken bearer.Token
-	//i understand this will restrict everything to the 'other' accounts
 	for _, r := range restrictedRecordsForOthers() {
 		table.AddRecord(r)
 	}
-
 	bearerToken.SetEACLTable(*table)
 	bearerToken.ForUser(gateID)
 	bearerToken.SetExp(lExp)
@@ -40,7 +37,7 @@ func BuildBearerToken(key *keys.PrivateKey, table *eacl.Table, lIat, lNbf, lExp 
 	bearerToken.SetNbf(lNbf)
 	var e neofsecdsa.Signer
 	e = (neofsecdsa.Signer)(key.PrivateKey)
-	err := bearerToken.Sign(e) //is this the owner who is giving access priveliges???
+	err := bearerToken.Sign(user.NewSigner(e, gateID)) //is this the owner who is giving access priveliges???
 	if err != nil {
 		return nil, fmt.Errorf("sign bearer token: %w", err)
 	}

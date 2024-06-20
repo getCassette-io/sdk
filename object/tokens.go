@@ -2,8 +2,10 @@ package object
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"github.com/configwizard/sdk/config"
 	"github.com/configwizard/sdk/payload"
+	"github.com/nspcc-dev/neo-go/pkg/crypto/keys"
 	"github.com/nspcc-dev/neofs-sdk-go/bearer"
 	"github.com/nspcc-dev/neofs-sdk-go/client"
 	cid "github.com/nspcc-dev/neofs-sdk-go/container/id"
@@ -13,14 +15,14 @@ import (
 )
 
 // fixme - move this file out of object.
-func ContainerBearerToken(p payload.Parameters, nodes []config.Peer) (bearer.Token, error) {
+func ContainerBearerToken(p payload.Parameters, issuerKey keys.PublicKey, nodes []config.Peer) (bearer.Token, error) {
 	var cnrID cid.ID
 	if err := cnrID.DecodeString(p.ID()); err != nil {
 		return bearer.Token{}, err
 	}
-	return ObjectBearerToken(cnrID, p, nodes)
+	return ObjectBearerToken(cnrID, p, issuerKey, nodes)
 }
-func ObjectBearerToken(cnrID cid.ID, p payload.Parameters, nodes []config.Peer) (bearer.Token, error) {
+func ObjectBearerToken(cnrID cid.ID, p payload.Parameters, issuerKey keys.PublicKey, nodes []config.Peer) (bearer.Token, error) {
 	gA, err := p.ForUser()
 	if err != nil {
 		return bearer.Token{}, err
@@ -45,11 +47,6 @@ func ObjectBearerToken(cnrID cid.ID, p payload.Parameters, nodes []config.Peer) 
 	bearerToken.SetExp(netInfo.CurrentEpoch() + p.Epoch()) // or particular exp value
 	tab := eacl.Table{}
 	tab.SetCID(cnrID)
-
-	//target := eacl.Target{}
-	//target.SetRole(eacl.RoleUnknown)
-	//target.SetBinaryKeys([][]byte{gA.PublicKey().Bytes()})
-
 	var records []*eacl.Record
 	//allow
 	for op := eacl.OperationGet; op <= eacl.OperationRangeHash; op++ {
@@ -59,8 +56,6 @@ func ObjectBearerToken(cnrID cid.ID, p payload.Parameters, nodes []config.Peer) 
 		equal := eacl.MatchStringEqual
 		equal.DecodeString(cnrID.String())
 		record.AddObjectContainerIDFilter(equal, cnrID)
-		//record.SetTargets(target)
-		//issue the bearer to the gate not yourself!
 		eacl.AddFormedTarget(record, eacl.RoleUnknown, gA.PrivateKey().PrivateKey.PublicKey)
 		records = append(records, record)
 	}
@@ -80,7 +75,8 @@ func ObjectBearerToken(cnrID cid.ID, p payload.Parameters, nodes []config.Peer) 
 		tab.AddRecord(r)
 	}
 	bearerToken.SetEACLTable(tab)
-	//marshaled := bearerToken.Marshal()
-	//fmt.Println("created marshaled ", string(marshaled))
+	var issuer user.ID
+	issuer = user.ResolveFromECDSAPublicKey(ecdsa.PublicKey(issuerKey))
+	bearerToken.SetIssuer(issuer)
 	return bearerToken, nil
 }
