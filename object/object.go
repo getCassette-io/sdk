@@ -152,15 +152,16 @@ func (o *ObjectCaller) Head(wg *waitgroup.WG, ctx context.Context, p payload.Par
 		return err
 	}
 	var prmHead client.PrmObjectHead
-	//fmt.Println("token provided to head ", token, token.(*tokens.BearerToken))
-	if tok, ok := token.(*tokens.BearerToken); !ok {
-		if tok, ok := token.(*tokens.PrivateBearerToken); !ok {
-			return errors.New(utils.ErrorNoToken) //in the future we could offer a session token, but not really recommended.
+	if token != nil {
+		if tok, ok := token.(*tokens.BearerToken); !ok {
+			if tok, ok := token.(*tokens.PrivateBearerToken); !ok {
+				return errors.New(utils.ErrorNoToken) //in the future we could offer a session token, but not really recommended.
+			} else {
+				prmHead.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
+			}
 		} else {
 			prmHead.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
 		}
-	} else {
-		prmHead.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
 	}
 	params, ok := p.(ObjectParameter)
 	if !ok {

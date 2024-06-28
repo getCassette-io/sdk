@@ -33,6 +33,7 @@ import (
 )
 
 type ContainerAction interface {
+	SynchronousContainerHead(ctx context.Context, cnrId cid.ID, pl *pool.Pool) (Container, error)
 	Head(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error
 	Restrict(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error
 	Create(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error
@@ -461,38 +462,27 @@ func (o *ContainerCaller) Restrict(wg *waitgroup.WG, ctx context.Context, p Cont
 		notification.ActionToast)
 	return nil
 }
-func (o *ContainerCaller) Head(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, _ tokens.Token) error {
-	var cnrId cid.ID
-	if err := cnrId.DecodeString(p.Id); err != nil {
-		actionChan <- o.Notification(
-			"failed to decode container Id",
-			err.Error(),
-			notification.Error,
-			notification.ActionToast)
-		return err
-	}
+func (o *ContainerCaller) SynchronousContainerHead(ctx context.Context, cnrId cid.ID, pl *pool.Pool) (Container, error) {
+
+	var localContainer Container
+
 	var prmGet client.PrmContainerGet
-	remoteContainer, err := p.Pl.ContainerGet(ctx, cnrId, prmGet)
+	remoteContainer, err := pl.ContainerGet(ctx, cnrId, prmGet)
 	if err != nil {
-		actionChan <- o.Notification(
-			"failed to retrieve container",
-			err.Error(),
-			notification.Error,
-			notification.ActionToast)
-		return err
+		return localContainer, err
 	}
-	sdkCli, err := p.Pl.RawClient()
+	sdkCli, err := pl.RawClient()
 	if err != nil {
 		fmt.Println("could not retrieve pool client ", err)
-		return err
+		return localContainer, err
 	}
 
 	//t, err := time.Parse(time.RFC3339, remoteContainer.CreatedAt().Unix())
 	//head is going to send a container object, just this time with the content populated
-	localContainer := Container{
+	localContainer = Container{
 		BasicACL:   remoteContainer.BasicACL().Bits(),
 		Name:       remoteContainer.Name(),
-		Id:         p.Id,
+		Id:         cnrId.String(),
 		Attributes: make(map[string]string),
 		DomainName: remoteContainer.ReadDomain().Name(),
 		DomainZone: remoteContainer.ReadDomain().Zone(),
@@ -509,9 +499,30 @@ func (o *ContainerCaller) Head(wg *waitgroup.WG, ctx context.Context, p Containe
 	}
 	table, err := ConvertNativeToEACLTable(containerEACL)
 	if err != nil {
-		return err
+		return localContainer, err
 	}
 	localContainer.ExtendedACL = table
+	return localContainer, nil
+}
+func (o *ContainerCaller) Head(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, _ tokens.Token) error {
+	var cnrId cid.ID
+	if err := cnrId.DecodeString(p.Id); err != nil {
+		actionChan <- o.Notification(
+			"failed to decode container Id",
+			err.Error(),
+			notification.Error,
+			notification.ActionToast)
+		return err
+	}
+	localContainer, err := o.SynchronousContainerHead(p.Ctx, cnrId, p.Pl)
+	if err != nil {
+		actionChan <- o.Notification(
+			"failed to retrieve container",
+			err.Error(),
+			notification.Error,
+			notification.ActionToast)
+		return err
+	}
 	//todo == this can use the same mechanism (ContainerAddUpdate) as it can supply a full object that just overwrites any existing entry.
 	if err := p.ContainerEmitter.Emit(ctx, emitter.ContainerAddUpdate, localContainer); err != nil {
 		actionChan <- o.Notification(
@@ -534,7 +545,6 @@ func (o *ContainerCaller) List(wg *waitgroup.WG, ctx context.Context, p Containe
 	userID := user.ResolveFromECDSAPublicKey(p.PublicKey)
 	fmt.Println("user listing containers", userID)
 	lst := client.PrmContainerList{}
-	lst.WithXHeaders() //fixme - dis
 	r, err := p.Pl.ContainerList(ctx, userID, lst)
 	if err != nil {
 		actionChan <- o.Notification(
@@ -566,15 +576,18 @@ func (c *ContainerCaller) Read(wg *waitgroup.WG, ctx context.Context, p Containe
 
 	//var ok bool
 	var bToken *bearer.Token
-	if tok, ok := token.(*tokens.BearerToken); !ok {
-		if tok, ok := token.(*tokens.PrivateBearerToken); !ok {
-			return errors.New(utils.ErrorNoToken)
+	if token != nil {
+		if tok, ok := token.(*tokens.BearerToken); !ok {
+			if tok, ok := token.(*tokens.PrivateBearerToken); !ok {
+				return errors.New(utils.ErrorNoToken)
+			} else {
+				bToken = tok.BearerToken
+			}
 		} else {
 			bToken = tok.BearerToken
 		}
-	} else {
-		bToken = tok.BearerToken
 	}
+
 	var cnrId cid.ID
 	if err := cnrId.DecodeString(p.Id); err != nil {
 		return errors.New(utils.ErrorNotFound) //todo - more specific?
@@ -592,7 +605,9 @@ func (c *ContainerCaller) Read(wg *waitgroup.WG, ctx context.Context, p Containe
 		gateSigner := user.NewAutoIDSignerRFC6979(p.GateAccount.PrivateKey().PrivateKey)
 
 		prms := client.PrmObjectSearch{}
-		prms.WithBearerToken(*bToken) //fixme - why is this a pointer?
+		if bToken != nil {
+			prms.WithBearerToken(*bToken)
+		}
 
 		filter := object.SearchFilters{}
 		filter.AddRootFilter()

@@ -308,37 +308,6 @@ func TransferTokenWithPrivateKey(acc *wallet.Account, websocket string, recipien
 	return tx /*.StringLE()*/, 0, nil
 
 }
-
-// //TransferToken transfer Nep17 token to another wallets, for instance use address here https://testcdn.fs.neo.org/doc/integrations/endpoints/
-// //simple example https://gist.github.com/alexvanin/4f22937b99990243a60b7abf68d7458c
-//func TransferToken(a *wallet.Account, amount int64, walletTo string, token util.Uint160, network RPC_NETWORK) (string, error) {
-//	ctx := context.Background()
-//	// use endpoint addresses of public RPC nodes, e.g. from https://dora.coz.io/monitor
-//	cli, err := client.New(ctx, string(network), client.Options{})
-//	if err != nil {
-//		fmt.Println("couldn't create client", err)
-//		return "", err
-//	}
-//	err = cli.Init()
-//	if err != nil {
-//		fmt.Println("couldn't init client", err)
-//		return "", err
-//	}
-//	recipient, err := StringToUint160(walletTo)
-//	if err != nil {
-//		fmt.Println("couldn't stringtoUint160 client", err)
-//		return "", err
-//	}
-//
-//	txHash, err := cli.TransferNEP17(a, recipient, token, amount, 0, nil, nil)
-//	if err != nil {
-//		fmt.Println("couldn't TransferNEP17 client", err)
-//	}
-//	le := txHash.StringLE()
-//	return le, err
-//}
-
-// todo ...
 func GenerateMultiSignWalletFromSigners() {
 	//	https://github.com/nspcc-dev/neo-go/blob/fdf80dbdc56d5f634908a5f0eb5ada2d9c7565af/docs/notary.md
 	//useful read https://github.com/nspcc-dev/neo-go/blob/d5e11e0a75403fc56f48f23c13d25597a5d5f5a5/pkg/wallet/account_test.go#L91
@@ -378,96 +347,6 @@ func ConvertScriptHashToAddressString(scriptHash string) (util.Uint160, string, 
 	return contractAddress, Uint160ToString(contractAddress), nil
 
 }
-
-// CreateTransactionFromFunctionCall creates a transaction to call a function on a smart contract) that still requires executing
-// Before this is ready for sending
-// Consider using https://pkg.go.dev/github.com/nspcc-dev/neo-go/pkg/rpc/client#Client.CreateTxFromScript as an alternative
-//func CreateTransactionFromFunctionCall(contractScriptHash string, operation string, network RPC_NETWORK, acc *wallet.Account, params []smartcontract.Parameter) (util.Uint256, *transaction.Transaction, error) {
-//	ctx := context.Background()
-//	// use endpoint addresses of public RPC nodes, e.g. from https://dora.coz.io/monitor
-//	cli, err := client.New(ctx, string(network), client.Options{})
-//	if err != nil {
-//		return util.Uint256{}, &transaction.Transaction{}, fmt.Errorf("can't create client %w\n", err)
-//	}
-//	err = cli.Init()
-//
-//	script := io.NewBufBinWriter()
-//
-//	contractAddress, _, err := ConvertScriptHashToAddressString(contractScriptHash)
-//	if err != nil {
-//		return util.Uint256{}, &transaction.Transaction{}, err
-//	}
-//	account, err := StringToUint160(acc.Address)
-//	if err != nil {
-//		return util.Uint256{}, &transaction.Transaction{}, err
-//	}
-//
-//	var args []interface{}
-//	for _, v := range params {
-//		args = append(args, v.Value)
-//	}
-//
-//	//callflag.All could be restricted? Should it be passed in?
-//	//operation e.g "symbol" - smart contract function to call.
-//	emit.AppCall(script.BinWriter, contractAddress, operation, callflag.All, args...) //call the function (dry run)
-//	tx := transaction.New(script.Bytes(), 0)
-//
-//	var signers []transaction.Signer
-//	signer := transaction.Signer{
-//		Account:          account, //the wallet that is allowed to execute the transaction
-//		Scopes:           transaction.CalledByEntry,
-//		AllowedContracts: nil, //not meaningful in the case of CalledByEntry
-//		AllowedGroups:    nil,
-//	}
-//	signers = append(signers, signer)
-//	tx.Signers = signers            //do i need to do this?
-//	witness := transaction.Witness{ //when/where do we set witnesses?
-//		InvocationScript:   script.Bytes(),
-//		VerificationScript: acc.GetVerificationScript(),
-//	}
-//	tx.Scripts = []transaction.Witness{witness}
-//
-//	testInvoke, err := cli.InvokeFunction(contractAddress, operation, params, signers)
-//	if err != nil {
-//		return util.Uint256{}, nil, fmt.Errorf("error invoking [test] function %w\r\n", err)
-//	}
-//	validUntilBlock, err := cli.CalculateValidUntilBlock()
-//	if err != nil {
-//		fmt.Println("valid until failed", err)
-//		return util.Uint256{}, nil, fmt.Errorf("error invoking validUntilBlock function %w\r\n", err)
-//	}
-//	tx.ValidUntilBlock = validUntilBlock
-//	fmt.Printf("tstTX %d - %s - %v\r\n", testInvoke.GasConsumed, testInvoke.FaultException, testInvoke.Transaction)
-//	systemFee := testInvoke.GasConsumed            //gas consumed invoking contract
-//	networkFee, err := cli.CalculateNetworkFee(tx) //calculating network networkFee
-//	if err != nil {
-//		return util.Uint256{}, nil, fmt.Errorf("error calculatng network fee %w\r\n", err)
-//	}
-//	tx.SystemFee = systemFee
-//	fmt.Printf("gas consumed (system fee) %d, (network fee) %d, invoking function\r\n", systemFee, networkFee)
-//	//adding network networkFee and gasConsumed to transaction with the wallet account paying
-//	err = cli.AddNetworkFee(tx, networkFee, acc)
-//	if err != nil {
-//		return util.Uint256{}, nil, fmt.Errorf("error adding network fee %w\r\n", err)
-//	}
-//	magic, err := cli.GetNetwork()
-//	if err != nil {
-//		return util.Uint256{}, nil, fmt.Errorf("error retreiving network magic %w\r\n", err)
-//	}
-//	err = acc.SignTx(magic, tx)
-//	if err != nil {
-//		return util.Uint256{}, nil, fmt.Errorf("error signing transaction %w\r\n", err)
-//	}
-//	//and when you are ready you can invoke it
-//	rawTransaction, err := cli.SendRawTransaction(tx)
-//
-//	if err != nil {
-//		return util.Uint256{}, nil, fmt.Errorf("error sending raw transaction %w\r\n", err)
-//	}
-//
-//	fmt.Printf("sent transaction %+v - ID %s\r\n", rawTransaction, rawTransaction.StringLE())
-//	return rawTransaction, tx, nil //return the signed transaction
-//}
 
 func GetLogForTransaction(network RPC_NETWORK, transactionID util.Uint256) (*result.ApplicationLog, error) {
 	ctx := context.Background()

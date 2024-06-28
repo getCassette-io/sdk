@@ -10,6 +10,8 @@ import (
 	"github.com/configwizard/sdk/tokens"
 	"github.com/configwizard/sdk/tui/views"
 	"github.com/configwizard/sdk/waitgroup"
+	cid "github.com/nspcc-dev/neofs-sdk-go/container/id"
+	"github.com/nspcc-dev/neofs-sdk-go/pool"
 	"time"
 )
 
@@ -39,7 +41,15 @@ func (o *MockContainer) Restrict(wg *waitgroup.WG, ctx context.Context, p Contai
 	//todo - create a new container
 	return nil
 }
-
+func (o *MockContainer) SynchronousContainerHead(ctx context.Context, cnrId cid.ID, pl *pool.Pool) (Container, error) {
+	return Container{
+		BasicACL:   0x1FBF9FFF,
+		Name:       "Mock Container",
+		Id:         "mockID",
+		Attributes: make(map[string]string),
+		CreatedAt:  time.Now().Unix(),
+	}, nil
+}
 func (o *MockContainer) Head(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error {
 	localContainer := Container{
 		BasicACL:   0x1FBF9FFF,
