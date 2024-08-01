@@ -8,14 +8,19 @@ import (
 	"fmt"
 	"github.com/configwizard/sdk/utils"
 	"github.com/nspcc-dev/neo-go/cli/flags"
+	"github.com/nspcc-dev/neo-go/pkg/core/block"
+	"github.com/nspcc-dev/neo-go/pkg/core/native/nativehashes"
+	"github.com/nspcc-dev/neo-go/pkg/core/state"
 	"github.com/nspcc-dev/neo-go/pkg/core/transaction"
 	"github.com/nspcc-dev/neo-go/pkg/crypto/keys"
 	"github.com/nspcc-dev/neo-go/pkg/encoding/address"
 	"github.com/nspcc-dev/neo-go/pkg/encoding/fixedn"
+	"github.com/nspcc-dev/neo-go/pkg/neorpc"
 	"github.com/nspcc-dev/neo-go/pkg/neorpc/result"
 	client "github.com/nspcc-dev/neo-go/pkg/rpcclient"
 	"github.com/nspcc-dev/neo-go/pkg/rpcclient/actor"
 	"github.com/nspcc-dev/neo-go/pkg/rpcclient/gas"
+	"github.com/nspcc-dev/neo-go/pkg/rpcclient/nep17"
 	"github.com/nspcc-dev/neo-go/pkg/rpcclient/notary"
 	"github.com/nspcc-dev/neo-go/pkg/rpcclient/waiter"
 	"github.com/nspcc-dev/neo-go/pkg/smartcontract/trigger"
@@ -23,6 +28,7 @@ import (
 	"github.com/nspcc-dev/neo-go/pkg/vm/opcode"
 	"github.com/nspcc-dev/neo-go/pkg/vm/vmstate"
 	"github.com/nspcc-dev/neo-go/pkg/wallet"
+	"log"
 	"math/big"
 	"strings"
 	"time"
@@ -119,6 +125,100 @@ type Nep17Token struct {
 	PrettyAmount string       `json:"pretty_amount"`
 	Precision    int          `json:"precision"`
 	Symbol       string       `json:"symbol"`
+}
+
+func QuickClient(ctx context.Context, websocket string) (*client.WSClient, error) {
+	wsC, err := client.NewWS(ctx, string(websocket), client.WSOptions{ //fixme - create one client for all. (not strictly necessary but we don't necessarily want to leave SubmitTransaction open forever)
+		Options:                        client.Options{},
+		CloseNotificationChannelIfFull: false,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := wsC.Init(); err != nil {
+		return nil, err
+	}
+	return wsC, nil
+}
+func ListenToBlocks(ctx context.Context, wsC *client.WSClient, blockChannel chan *block.Block) {
+	_, err := wsC.ReceiveBlocks(nil, blockChannel)
+	if err != nil {
+		log.Fatalf("could not listen for blocks %s\n", err)
+	}
+	for {
+		select {
+		case b := <-blockChannel:
+			fmt.Printf("block received %+v", b)
+		}
+	}
+	select {
+	case <-ctx.Done():
+		fmt.Println("Context cancelled, stopping wallet listener")
+		close(blockChannel)
+	}
+}
+func ListenForWalletGasChanges(ctx context.Context, wsC *client.WSClient, address string, received chan nep17.TransferEvent) {
+	notificationChannel := make(chan *state.ContainedNotificationEvent)
+
+	defer close(notificationChannel)
+
+	filter := &neorpc.NotificationFilter{Contract: &nativehashes.GasToken}
+	resp, err := wsC.ReceiveExecutionNotifications(filter, notificationChannel)
+	if err != nil {
+		log.Fatalf("Failed to subscribe to notifications: %v", err)
+	}
+
+	fmt.Println("resp ", resp)
+	// Listen for notifications
+	go func() {
+		for notification := range notificationChannel {
+			fmt.Printf("Notification received: %+v\n", notification)
+			var te nep17.TransferEvent
+			err = te.FromStackItem(notification.Item)
+			from := Uint160ToString(te.From)
+			to := Uint160ToString(te.To)
+			if from == address || to == address {
+				fmt.Printf("transfer event from %s - to %s- %+v\n", from, to, te)
+				received <- te
+			}
+		}
+	}()
+
+	// Keep the goroutine alive to listen to notifications
+	select {
+	case <-ctx.Done():
+		fmt.Println("Context cancelled, stopping wallet listener")
+		return
+	}
+}
+func WaitForTransaction(ctx context.Context, wsC *client.WSClient, txHash string) error {
+	version, err := wsC.GetVersion()
+	blockCount, err := wsC.GetBlockCount()
+	if err != nil {
+		return err
+	}
+
+	txHash = strings.TrimPrefix(txHash, "0x")
+	fmt.Println("length of tx hash ", len(txHash), txHash)
+	txId, err := util.Uint256DecodeStringLE(txHash)
+	if err != nil {
+		fmt.Println("txiderr ", err)
+		return err
+	}
+
+	newWaiter := waiter.New(wsC, version)
+	// Use Waiter to wait for the transaction
+	aer, err := newWaiter.Wait(txId, blockCount+100, nil)
+	if err != nil {
+		fmt.Println("waiter error ", err)
+		return err
+	}
+
+	if aer.VMState != vmstate.Halt { // HALT is successful
+		return err
+	}
+	fmt.Printf("Transaction confirmed successfully %+v\r\n", aer)
+	return nil
 }
 
 // decrypted account

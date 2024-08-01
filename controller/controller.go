@@ -3,7 +3,6 @@ package controller
 import (
 	"context"
 	"crypto/ecdsa"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -14,7 +13,6 @@ import (
 	"github.com/configwizard/sdk/object"
 	"github.com/configwizard/sdk/payload"
 	gspool "github.com/configwizard/sdk/pool"
-	"github.com/configwizard/sdk/readwriter"
 	"github.com/configwizard/sdk/tokens"
 	"github.com/configwizard/sdk/utils"
 	"github.com/configwizard/sdk/waitgroup"
@@ -169,11 +167,6 @@ func (w WCWallet) Address() string {
 	return w.WalletAddress
 }
 func (w WCWallet) Sign(p payload.Payload) error {
-	sEnc := base64.StdEncoding.EncodeToString(p.OutgoingData)
-
-	fmt.Println("b64 encoded outgoing data ", sEnc)
-	//p.OutgoingData
-	fmt.Printf("requested to sign %+v with %+v\r\n", p, w.emitter)
 	return w.emitter.Emit(w.Ctx, emitter.RequestSign, p)
 }
 
@@ -214,7 +207,9 @@ type Controller struct {
 	Signer                 emitter.Emitter
 	Notifier               notification.Notifier
 	ProgressHandlerManager *notification.ProgressHandlerManager
-	pendingEvents          map[payload.UUID]payload.Payload     //holds any asynchronous information sent to frontend
+	objectEventMapSync     *sync.Mutex
+	pendingEvents          map[payload.UUID]payload.Payload //holds any asynchronous information sent to frontend
+	objectActionMapSync    *sync.Mutex
 	objectActionMap        map[payload.UUID]ObjectActionType    // Maps payload UID to corresponding action
 	containerActionMap     map[payload.UUID]ContainerActionType // Maps payload UID to corresponding action
 }
@@ -248,6 +243,8 @@ func NewCustomController(wg *sync.WaitGroup, ctx context.Context /*cancelFunc co
 		Notifier:               notifier,
 		ProgressHandlerManager: notification.NewProgressHandlerManager(notification.DataProgressHandlerFactory, progressBarEmitter),
 		pendingEvents:          make(map[payload.UUID]payload.Payload),
+		objectActionMapSync:    &sync.Mutex{}, //locks recording actions
+		objectEventMapSync:     &sync.Mutex{},
 		objectActionMap:        make(map[payload.UUID]ObjectActionType),
 		containerActionMap:     make(map[payload.UUID]ContainerActionType),
 	}
@@ -492,6 +489,25 @@ func (c *Controller) UpdateFromWalletConnect(signedPayload payload.Payload) erro
 	return errors.New(utils.ErrorNotFound)
 }
 
+func containerActionCaller(wg *waitgroup.WG, ctx context.Context, p container.ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token, action ContainerActionType) error {
+	wgMessage := "containerRead"
+	wg2 := waitgroup.NewWaitGroup(log.Default())
+	wg2.Add(1, wgMessage)
+	errChan := make(chan error)
+	go func() {
+		defer func() {
+			wg2.Done(wgMessage)
+			fmt.Println("[container] HEAD action completed")
+		}()
+		err := action(wg, ctx, p, actionChan, token)
+		errChan <- err
+		close(errChan)
+	}()
+	err := <-errChan
+	wg2.Wait()
+
+	return err
+}
 func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Context, cancelCtx context.CancelFunc, p payload.Parameters, action ContainerActionType) error {
 	fmt.Printf("performing container action  %T -- %s\r\n", action, utils.GetCallerFunctionName())
 	defer cancelCtx()
@@ -536,10 +552,12 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 		return errors.New("parameters not valid")
 	}
 	var cnrId cid.ID
-
 	if err := cnrId.DecodeString(p.ID()); err != nil || containerParameters.Verb == 0 { //unknown verb for container unnamed
 		fmt.Println("verb is empty. We are going to just attempt the action directly.")
 		//no container ID. lets try anyway
+		if err != nil {
+			//we don't have a container. This must be a container only action like a list.
+		}
 		if err := action(wg, ctx, containerParameters, actionChan, nil); err != nil {
 			//handle the error with the UI (n)
 			fmt.Println("error executing action ", err)
@@ -551,28 +569,35 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 		fmt.Println("finished waiting for action to complete...")
 		return nil
 	}
+	/*
+		1. attempt to make the action call without a token.
+	*/
+	//fixme - this has become inefficient. We have multiple ways and places we retrieve the container head.
+	//what we really need to know is the permissions and if its even worth trying to list the objects, if we can't get the head
+	//this is slow and cumbersome
+	o := container.ContainerCaller{}
+	localContainer, err := o.SynchronousContainerHead(ctx, cnrId, containerParameters.Pl)
+	//acl := localContainer.BasicACL
+	for _, e := range localContainer.ExtendedACL.Records {
+		if e.Operation == eacl.OperationHead || e.Operation == eacl.OperationSearch {
+			if e.Action == eacl.ActionAllow {
+				//we can access the head of the objects. We can continue without a token
+				if err := containerActionCaller(wg, ctx, containerParameters, actionChan, nil, action); err != nil {
+					fmt.Println("unauthorized access failed. Attemting auth'd access")
+					break
+				} else {
+					return nil
+				}
+			}
+		}
+	}
+	//if err := containerActionCaller(wg, ctx, containerParameters, actionChan, nil, action); err != nil {
+	//	fmt.Println("unauthorized access failed. Attemting auth'd access")
+	//} else {
+	//	return nil
+	//}
 
 	if containerParameters.Session { //forcing the creation of new session token for containers every time?
-		//if tok, err := c.TokenManager.FindContainerSessionToken(c.wallet.Address(), cnrId, p.Epoch()); err == nil {
-		//	//we believe we have a token that can perform
-		//	//the action should now be passed what it was going to be passed anyway, along with the token that it can use to make the request.
-		//	//these actions will be responsible for notifying UI themselves (i.e progress bars etc)
-		//	if t, ok := tok.(*tokens.ContainerSessionToken); !ok {
-		//		return errors.New("no session token available")
-		//	} else {
-		//		fmt.Println("using container session toke ", t.SessionToken.ID())
-		//	}
-		//	fmt.Println("FOUND - session token ", tok)
-		//	if err := action(wg, ctx, containerParameters, actionChan, tok); err != nil {
-		//		//notification (interface) handler would handle any errors here. (c.notificationHandler interface type)
-		//		return err
-		//	}
-		//	fmt.Println("waiting for action to complete...")
-		//	wg.Wait()
-		//	fmt.Println("finished waiting for action to complete...")
-		//	return nil // this task has been triggered. No need to continue
-		//}
-
 		fmt.Println("just going to always force session token creation")
 	} else {
 		if tok, err := c.TokenManager.FindBearerToken(c.wallet.Address(), cnrId, p.Epoch(), eacl.OperationSearch); err == nil {
@@ -583,14 +608,10 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 					return errors.New("no bearer token available")
 				}
 			} else {
-				if err := action(wg, ctx, containerParameters, actionChan, t); err != nil {
-					//notification (interface) handler would handle any errors here. (c.notificationHandler interface type)
+				if err := containerActionCaller(wg, ctx, containerParameters, actionChan, t, action); err != nil {
+					//fixme - put the error notification here.
 					return err
 				}
-				fmt.Println("waiting for action to complete...")
-				wg.Wait()
-				fmt.Println("finished waiting for action to complete...")
-
 				return nil // this task has been triggered. No need to continue
 			}
 		}
@@ -698,7 +719,7 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 					c.TokenManager.AddBearerToken(c.Account().Address(), cnrId.String(), token) //listing container contents is done with a bearer
 				}
 				if act, exists := c.containerActionMap[payload.UUID(latestPayload.Uid)]; exists {
-					if err := act(wg, ctx, containerParameters, actionChan, token); err != nil {
+					if err := containerActionCaller(wg, ctx, containerParameters, actionChan, token, act); err != nil {
 						//handle the error with the UI (n)
 						c.logger.Println("error executing action ", err)
 						return
@@ -721,6 +742,26 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 	c.logger.Println("FINISH closed action ", action)
 	fmt.Println("groups - ", wg.Groups())
 	return nil
+}
+
+func objectActionCaller(wg *waitgroup.WG, ctx context.Context, p object.ObjectParameter, actionChan chan notification.NewNotification, token tokens.Token, action ObjectActionType) error {
+	//wgMessage := "containerRead"
+	//wg2 := waitgroup.NewWaitGroup(log.Default())
+	//wg2.Add(1, wgMessage)
+	//errChan := make(chan error)
+	//go func() {
+	//	defer func() {
+	//		wg2.Done(wgMessage)
+	//		fmt.Println("[container] HEAD action completed")
+	//	}()
+	//	err := action(wg, ctx, p, actionChan, token)
+	//	errChan <- err
+	//	close(errChan)
+	//}()
+	//wg2.Wait()
+	//err := <-errChan
+	err := action(wg, ctx, p, actionChan, token)
+	return err
 }
 
 // PerformObjectAction is partnered with any 'event' that requires and action from the user and could take a while.
@@ -770,60 +811,45 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 			}
 		}
 	}()
+	var objectParameters object.ObjectParameter
+	var ok bool
+	if objectParameters, ok = p.(object.ObjectParameter); !ok {
+		fmt.Println("operation get, but no objectparameterss. Bailing out")
+		return err
+	}
 
-	//fixme = don't think can use bearer token for containers. need to change this call so that gets correct token from manager.
-	//at this point we need to find out if we have a bearer token that can handle this action for us
-	//1. check if we have a token that will fulfil the operation for the request
-	//to force this, just provide a token to the token manager that will be picked up here.
+	/*
+		1. if we have a token, just use it
+	*/
 	if bearerToken, err := c.TokenManager.FindBearerToken(c.wallet.Address(), cnrId, p.Epoch(), p.Operation()); err == nil {
-		//we believe we have a token that can perform
-		//the action should now be passed what it was going to be passed anyway, along with the token that it can use to make the request.
-		//these actions will be responsible for notifying UI themselves (i.e progress bars etc)
-		var objectParameters object.ObjectParameter
-		var ok bool
-		//var objectWriteCloser io.WriteCloser
-		if objectParameters, ok = p.(object.ObjectParameter); ok {
-			if p.Operation() == eacl.OperationGet { //fixme: - move this like the put was moved.
-				//if objectParameters, ok = p.(object.ObjectParameter); ok {
-				_, objectReader, err := object.InitReader(ctx, objectParameters, bearerToken)
-				if err != nil {
-					return err
-				}
-				if ds, ok := objectParameters.ReadWriter.(*readwriter.DualStream); ok {
-					ds.Reader = objectReader
-				} else {
-					return errors.New("not a dual stream")
-				}
-				//thought: you could use the destinationObject to update the UI before its downloaded with an emitter
-				//destinationObject.PayloadSize() //use this with the progress bar
-			}
-			//else if p.Operation() == eacl.OperationPut {
-			//	objectWriteCloser, err = object.InitWriter(ctx, &objectParameters, bearerToken)
-			//	if err != nil {
-			//		return err
-			//	}
-			//	if ds, ok := objectParameters.ReadWriter.(*readwriter.DualStream); ok {
-			//		ds.Writer = objectWriteCloser
-			//	} else {
-			//		return errors.New("not a dual stream")
-			//	}
-			//}
-		} else {
-			fmt.Println("operation get, but no objectparameterss. Bailing out")
-			return err
-		}
-		if err := action(wg, ctx, objectParameters, actionChan, bearerToken); err != nil {
+		if err := objectActionCaller(wg, ctx, objectParameters, actionChan, bearerToken, action); err != nil {
 			return err
 		}
 		return nil // this task has been triggered. No need to continue
 	}
+	/*
+		2. try accessing the object directly
+	*/
+	if err := objectActionCaller(wg, ctx, objectParameters, actionChan, nil, action); err != nil {
+		fmt.Println("unauthorized access failed. Attemting auth'd access")
+	} else {
+		return nil
+	}
+	/*
+		3. ok we are going to need to request a signature.
+	*/
 	var neoFSPayload payload.Payload
 	neoFSPayload.Uid = payload.UUID(uuid.New().String())
 	neoFSPayload.ResponseCh = make(chan bool)
 	c.logger.Println("created responsechannel ", neoFSPayload.ResponseCh)
 	// Store the action in the map
+	c.objectActionMapSync.Lock()
+	/*
+		if there is no action or event occuring then we add to the map for this ID.
+		otherwise we wait for the signal that its been signed before continuing?
+	*/
 	c.objectActionMap[payload.UUID(neoFSPayload.Uid)] = action
-
+	c.objectActionMapSync.Unlock()
 	bPubKey, err := hex.DecodeString(c.wallet.PublicKeyHexString())
 	if err != nil {
 		log.Fatal("could not decode public key - ", err)
@@ -871,9 +897,13 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 				// Payload signed, perform the action
 				var latestPayload payload.Payload
 				//c.logger.Printf("payload - ", neoFSPayload)
-				if pendingPayload, exists := c.pendingEvents[neoFSPayload.Uid]; exists {
+				c.objectEventMapSync.Lock()
+				pendingPayload, exists := c.pendingEvents[neoFSPayload.Uid]
+				c.objectEventMapSync.Unlock()
+				if exists {
 					latestPayload = pendingPayload
 				} else {
+
 					return
 				}
 				if act, exists := c.objectActionMap[latestPayload.Uid]; exists {
@@ -881,45 +911,27 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 						c.logger.Println("error signing token ", err)
 						return
 					}
+					c.TokenManager.AddBearerToken(c.Account().Address(), cnrId.String(), bearerToken)
 					//for certain actions objects need a 'pre-requisite'
 					//we need to run this first. We can use the operation to check
-					var objectParameters object.ObjectParameter
-					var ok bool
 					//var objectWriteCloser io.WriteCloser
-					if objectParameters, ok = p.(object.ObjectParameter); ok {
-						if p.Operation() == eacl.OperationGet {
-							//if objectParameters, ok = p.(object.ObjectParameter); ok {
-							_, objectReader, err := object.InitReader(ctx, objectParameters, bearerToken)
-							if err != nil {
-								return
-							}
-							if ds, ok := objectParameters.ReadWriter.(*readwriter.DualStream); ok {
-								ds.Reader = objectReader
-							} else {
-								return
-							}
-							//thought: you could use the destinationObject to update the UI before its downloaded with an emitter
-							//destinationObject.PayloadSize() //use this with the progress bar
-						}
-						//else if p.Operation() == eacl.OperationPut {
-						//	//fixme - mutating the objectParameters here for the ID? Good idea?
-						//	objectWriteCloser, err := object.InitWriter(ctx, &objectParameters, bearerToken)
-						//	if err != nil {
-						//		return
-						//	}
-						//	if ds, ok := objectParameters.ReadWriter.(*readwriter.DualStream); ok {
-						//		ds.Writer = objectWriteCloser
-						//	} else {
-						//		return
-						//	}
-						//}
-					} else {
-						fmt.Println("operation get, but no objectparameterss. Bailing out")
-						return
-					}
-					if err := act(wg, ctx, objectParameters, actionChan, bearerToken); err != nil {
+					//if p.Operation() == eacl.OperationGet {
+					//	//if objectParameters, ok = p.(object.ObjectParameter); ok {
+					//	_, objectReader, err := object.InitReader(ctx, objectParameters, bearerToken)
+					//	if err != nil {
+					//		return
+					//	}
+					//	if ds, ok := objectParameters.ReadWriter.(*readwriter.DualStream); ok {
+					//		ds.Reader = objectReader
+					//	} else {
+					//		return
+					//	}
+					//	//thought: you could use the destinationObject to update the UI before its downloaded with an emitter
+					//	//destinationObject.PayloadSize() //use this with the progress bar
+					//}
+					if err := objectActionCaller(wg, ctx, objectParameters, actionChan, bearerToken, act); err != nil {
 						//handle the error with the UI (n)
-						c.logger.Println("error executing action ", err)
+						c.logger.Println("object error executing action ", err)
 						return
 					}
 					//else if p.Operation() == eacl.OperationPut {

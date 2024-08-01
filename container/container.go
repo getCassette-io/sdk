@@ -137,6 +137,48 @@ type Target struct {
 	PublicKeys []string  `json:"publicKeys"`
 }
 
+func CustomAccessTable(denyPermissions, allowPermissions []string) (eacl.Table, error) {
+	// set EACL denying WRITE access to OTHERS
+	eACL := eacl.NewTable()
+	//this will deny before allow which means that it will block if its in this table and the allow list.
+	for _, v := range denyPermissions {
+		switch v {
+		case "put":
+			denyOpToOthers(eACL, eacl.OperationPut)
+		case "delete":
+			denyOpToOthers(eACL, eacl.OperationDelete)
+		case "head":
+			denyOpToOthers(eACL, eacl.OperationHead)
+		case "get":
+			denyOpToOthers(eACL, eacl.OperationGet)
+		case "search":
+			denyOpToOthers(eACL, eacl.OperationSearch)
+		case "range":
+			denyOpToOthers(eACL, eacl.OperationRange)
+		case "range_hash":
+			denyOpToOthers(eACL, eacl.OperationRangeHash)
+		}
+	}
+	for _, v := range allowPermissions {
+		switch v {
+		case "put":
+			allowOpToOthers(eACL, eacl.OperationPut)
+		case "delete":
+			allowOpToOthers(eACL, eacl.OperationDelete)
+		case "head":
+			allowOpToOthers(eACL, eacl.OperationHead)
+		case "get":
+			allowOpToOthers(eACL, eacl.OperationGet)
+		case "search":
+			allowOpToOthers(eACL, eacl.OperationSearch)
+		case "range":
+			allowOpToOthers(eACL, eacl.OperationRange)
+		case "range_hash":
+			allowOpToOthers(eACL, eacl.OperationRangeHash)
+		}
+	}
+	return *eACL, nil
+}
 func DefaultContainerRestrictionTable(cnrID string) (eacl.Table, error) {
 	var cnrId cid.ID
 	if err := cnrId.DecodeString(cnrID); err != nil {
@@ -575,6 +617,7 @@ func (o *ContainerCaller) List(wg *waitgroup.WG, ctx context.Context, p Containe
 func (c *ContainerCaller) Read(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error {
 
 	//var ok bool
+	prms := client.PrmObjectSearch{}
 	var bToken *bearer.Token
 	if token != nil {
 		if tok, ok := token.(*tokens.BearerToken); !ok {
@@ -585,7 +628,9 @@ func (c *ContainerCaller) Read(wg *waitgroup.WG, ctx context.Context, p Containe
 			}
 		} else {
 			bToken = tok.BearerToken
+			prms.WithBearerToken(*tok.BearerToken)
 		}
+		prms.WithBearerToken(*bToken)
 	}
 
 	var cnrId cid.ID
@@ -594,59 +639,54 @@ func (c *ContainerCaller) Read(wg *waitgroup.WG, ctx context.Context, p Containe
 	}
 
 	// todo: list all containers
-	wgMessage := "containerRead"
-	wg.Add(1, wgMessage)
-	go func() {
-		defer func() {
-			wg.Done(wgMessage)
-			fmt.Println("[container] HEAD action completed")
-		}()
+	//wgMessage := "containerRead"
+	//wg.Add(1, wgMessage)
+	//go func() {
+	//	defer func() {
+	//		wg.Done(wgMessage)
+	//		fmt.Println("[container] HEAD action completed")
+	//	}()
 
-		gateSigner := user.NewAutoIDSignerRFC6979(p.GateAccount.PrivateKey().PrivateKey)
+	gateSigner := user.NewAutoIDSignerRFC6979(p.GateAccount.PrivateKey().PrivateKey)
 
-		prms := client.PrmObjectSearch{}
-		if bToken != nil {
-			prms.WithBearerToken(*bToken)
-		}
-
-		filter := object.SearchFilters{}
-		filter.AddRootFilter()
-		prms.SetFilters(filter)
-		init, err := p.Pl.ObjectSearchInit(ctx, cnrId, gateSigner, prms)
-		if err != nil {
-			fmt.Println("err p.Pl.ObjectSearchInit", err)
+	filter := object.SearchFilters{}
+	filter.AddRootFilter()
+	prms.SetFilters(filter)
+	init, err := p.Pl.ObjectSearchInit(ctx, cnrId, gateSigner, prms)
+	if err != nil {
+		fmt.Println("err p.Pl.ObjectSearchInit", err)
+		actionChan <- c.Notification(
+			"failed to list objects",
+			"could not list objects "+err.Error(),
+			notification.Error,
+			notification.ActionToast)
+		return err
+	}
+	if err = init.Iterate(func(id oid.ID) bool {
+		fmt.Println("received ", id.String())
+		//similar to containers, we need to get the head of an object now.
+		//the container emitter can inform an object emitter (if needs be) that a new object is available for the UI
+		//before retrieving data about the object.
+		if err := p.ContainerEmitter.Emit(ctx, emitter.ObjectAddUpdate, object2.Object{Id: id.String(), ParentID: cnrId.String()}); err != nil {
+			fmt.Println("emitting object from iterator error ", err)
 			actionChan <- c.Notification(
-				"failed to list objects",
-				"could not list objects "+err.Error(),
+				"failed to iterate objects",
+				"could not iterate objects "+err.Error(),
 				notification.Error,
-				notification.ActionToast)
-			return
+				notification.ActionNotification)
+			return true
 		}
-		if err = init.Iterate(func(id oid.ID) bool {
-			fmt.Println("received ", id.String())
-			//similar to containers, we need to get the head of an object now.
-			//the container emitter can inform an object emitter (if needs be) that a new object is available for the UI
-			//before retrieving data about the object.
-			if err := p.ContainerEmitter.Emit(ctx, emitter.ObjectAddUpdate, object2.Object{Id: id.String(), ParentID: cnrId.String()}); err != nil {
-				fmt.Println("emitting object from iterator error ", err)
-				actionChan <- c.Notification(
-					"failed to iterate objects",
-					"could not iterate objects "+err.Error(),
-					notification.Error,
-					notification.ActionNotification)
-				return true
-			}
-			return false
-		}); err != nil {
-			fmt.Println("error iterator ", err)
-			actionChan <- c.Notification(
-				"failed to call object iterator",
-				"failed to call object iterator "+err.Error(),
-				notification.Error,
-				notification.ActionToast)
-			return
-		}
-	}()
+		return false
+	}); err != nil {
+		fmt.Println("error iterator ", err)
+		actionChan <- c.Notification(
+			"failed to call object iterator",
+			"failed to call object iterator "+err.Error(),
+			notification.Error,
+			notification.ActionToast)
+		return err
+	}
+	//}()
 
 	return nil
 }

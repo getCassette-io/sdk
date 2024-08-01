@@ -31,6 +31,7 @@ import (
 )
 
 type ObjectAction interface {
+	SynchronousObjectHead(ctx context.Context, cnrId cid.ID, objID oid.ID, signer user.Signer, pl *pool.Pool) (Object, error)
 	Head(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error
 	Create(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error
 	Read(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error
@@ -127,6 +128,56 @@ func (o *ObjectCaller) SetNotifier(notifier notification.Notifier) {
 }
 func (o *ObjectCaller) SetStore(store database.Store) {
 	o.Store = store
+}
+
+func (o *ObjectCaller) SynchronousObjectHead(ctx context.Context, cnrId cid.ID, objID oid.ID, signer user.Signer, pl *pool.Pool) (Object, error) {
+	var prmHead client.PrmObjectHead
+	fmt.Printf("ids %s - %s\n", cnrId.String(), objID.String())
+	//retrieving an object head is public
+	hdr, err := pl.ObjectHead(ctx, cnrId, objID, signer, prmHead)
+	if err != nil {
+		if reason, ok := isErrAccessDenied(err); ok {
+			fmt.Printf("error here: %s: %s\r\n", err, reason)
+			return Object{}, err
+		}
+		fmt.Printf("read object header via connection pool: %s", err)
+		return Object{}, err
+	}
+	id, ok := hdr.ID()
+	if !ok {
+		return Object{}, err
+	}
+	localObject := Object{
+		ParentID:   cnrId.String(),
+		Id:         id.String(),
+		Size:       hdr.PayloadSize(),
+		CreatedAt:  time.Time{}.Unix(),
+		Attributes: make(map[string]string),
+	}
+	for _, v := range hdr.Attributes() {
+		switch v.Key() {
+		case object.AttributeTimestamp:
+			timestampInt, err := strconv.ParseInt(v.Value(), 10, 64)
+			if err != nil {
+				fmt.Println("Error converting string to int:", err)
+				return Object{}, err
+			}
+			localObject.CreatedAt = timestampInt
+		case object.AttributeContentType:
+			localObject.ContentType = v.Value()
+		case object.AttributeFileName:
+			localObject.Name = v.Value()
+		case object.AttributeExpirationEpoch:
+			//nothing yet
+		case object.AttributeFilePath:
+			//nothing yetm
+		}
+		localObject.Attributes[v.Key()] = v.Value()
+	}
+	checksum, _ := hdr.PayloadChecksum()
+	localObject.Attributes[payloadChecksumHeader] = checksum.String()
+
+	return localObject, nil
 }
 
 // todo - this will need to handle synchronous requests to the database and then asynchronous requests to the network
@@ -235,14 +286,16 @@ func (o *ObjectCaller) Delete(wg *waitgroup.WG, ctx context.Context, p payload.P
 		return errors.New("no object parameters")
 	}
 	var prmDelete client.PrmObjectDelete
-	if tok, ok := token.(*tokens.BearerToken); !ok {
-		if tok, ok := token.(*tokens.PrivateBearerToken); !ok {
-			return errors.New("no bearer token provided")
+	if token != nil {
+		if tok, ok := token.(*tokens.BearerToken); !ok {
+			if tok, ok := token.(*tokens.PrivateBearerToken); !ok {
+				return errors.New("no bearer token provided")
+			} else {
+				prmDelete.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
+			}
 		} else {
 			prmDelete.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
 		}
-	} else {
-		prmDelete.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
 	}
 	gateSigner := user.NewAutoIDSignerRFC6979(gA.PrivateKey().PrivateKey)
 	ctx, _ = context.WithTimeout(ctx, 60*time.Second)
@@ -332,14 +385,16 @@ func InitReader(ctx context.Context, params ObjectParameter, token tokens.Token)
 	}
 	gateSigner := user.NewAutoIDSigner(gA.PrivateKey().PrivateKey) //fix me is this correct signer?
 	getInit := client.PrmObjectGet{}
-	if tok, ok := token.(*tokens.BearerToken); !ok {
-		if tok, ok := token.(*tokens.PrivateBearerToken); !ok {
-			return object.Object{}, nil, errors.New("no bearer token provided")
+	if token != nil {
+		if tok, ok := token.(*tokens.BearerToken); !ok {
+			if tok, ok := token.(*tokens.PrivateBearerToken); !ok {
+				return object.Object{}, nil, errors.New("no bearer token provided")
+			} else {
+				getInit.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
+			}
 		} else {
 			getInit.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
 		}
-	} else {
-		getInit.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
 	}
 	dstObject, objReader, err := params.Pool().ObjectGetInit(ctx, cnrID, objID, gateSigner, getInit)
 	if err != nil {
@@ -354,6 +409,20 @@ func InitReader(ctx context.Context, params ObjectParameter, token tokens.Token)
 }
 
 func (o ObjectCaller) Read(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error {
+
+	objectParameters, ok := p.(ObjectParameter)
+	if ok {
+		_, objectReader, err := InitReader(ctx, objectParameters, token)
+		if err != nil {
+			return err
+		}
+		if ds, ok := objectParameters.ReadWriter.(*readwriter.DualStream); ok {
+			ds.Reader = objectReader
+		} else {
+			return errors.New("not a dual stream")
+		}
+	}
+
 	buf := make([]byte, 1024)
 	for {
 		n, err := p.Read(buf)
@@ -419,17 +488,17 @@ func InitWriter(ctx context.Context, p *ObjectParameter, token tokens.Token) (io
 	opts.SetObjectPayloadLimit(ni.MaxObjectSize())
 	opts.SetCurrentNeoFSEpoch(ni.CurrentEpoch())
 
-	var bearerToken *bearer.Token
-	if tok, ok := token.(*tokens.BearerToken); !ok {
-		if tok, ok := token.(*tokens.PrivateBearerToken); !ok {
-			return nil, errors.New("no bearer token provided")
+	if token != nil {
+		if tok, ok := token.(*tokens.BearerToken); !ok {
+			if tok, ok := token.(*tokens.PrivateBearerToken); !ok {
+				return nil, errors.New("no bearer token provided")
+			} else {
+				opts.SetBearerToken(*tok.BearerToken)
+			}
 		} else {
-			bearerToken = tok.BearerToken
+			opts.SetBearerToken(*tok.BearerToken)
 		}
-	} else {
-		bearerToken = tok.BearerToken
 	}
-	opts.SetBearerToken(*bearerToken) //now we know its a bearer token we can extract it
 
 	if !ni.HomomorphicHashingDisabled() {
 		opts.CalculateHomomorphicChecksum()

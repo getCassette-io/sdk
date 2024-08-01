@@ -20,7 +20,14 @@ func unsignedContainerSessionForOp(ownerSigner, gateSigner user.Signer, curEpoch
 
 	return cnrSession
 }
+func allowOpToOthers(eACL *eacl.Table, op eacl.Operation) {
+	var rec eacl.Record
+	rec.SetOperation(op)
+	rec.SetAction(eacl.ActionAllow)
+	eacl.AddFormedTarget(&rec, eacl.RoleOthers)
 
+	eACL.AddRecord(&rec)
+}
 func denyOpToOthers(eACL *eacl.Table, op eacl.Operation) {
 	var rec eacl.Record
 	rec.SetOperation(op)

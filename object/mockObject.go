@@ -5,6 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"github.com/bxcodec/faker/v3"
+	cid "github.com/nspcc-dev/neofs-sdk-go/container/id"
+	oid "github.com/nspcc-dev/neofs-sdk-go/object/id"
+	"github.com/nspcc-dev/neofs-sdk-go/pool"
+	"github.com/nspcc-dev/neofs-sdk-go/user"
 
 	"github.com/configwizard/sdk/database"
 	"github.com/configwizard/sdk/emitter"
@@ -33,6 +37,10 @@ func (o *MockObject) SetNotifier(notifier notification.Notifier) {
 }
 func (o *MockObject) SetStore(store database.Store) {
 	o.Store = store
+}
+
+func (o *MockObject) SynchronousObjectHead(ctx context.Context, cnrId cid.ID, objID oid.ID, signer user.Signer, pl *pool.Pool) (Object, error) {
+	return Object{}, nil
 }
 
 // todo - this will need to handle synchronous requests to the database and then asynchronous requests to the network

@@ -454,7 +454,7 @@ func (t *WalletConnectTokenManager) AddBearerToken(address, cnrID string, b Toke
 
 // FindBearerToken should see if we have a valid token to do the job. If not create a new one.
 func (t WalletConnectTokenManager) FindBearerToken(address string, id cid.ID, epoch uint64, operation eacl.Operation) (Token, error) {
-	fmt.Println("looking for bearer for action ", operation)
+	fmt.Println("looking for bearer for action ", operation, t.BearerTokens)
 	if tok, ok := t.BearerTokens[fmt.Sprintf("%s.%s", address, id)]; ok {
 		tok, ok := tok.(*BearerToken)
 		if !ok {
