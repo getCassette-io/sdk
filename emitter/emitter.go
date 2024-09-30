@@ -24,6 +24,7 @@ const (
 	HeadRetrieved             EventMessage = "head_retrieved" //used when not part of a larger asynchronous request
 	ContainerRemoveUpdate     EventMessage = "container_remove_update"
 	ObjectAddUpdate           EventMessage = "object_add_update"
+	ObjectRangeUpdate         EventMessage = "object_range_update"
 	ObjectRemoveUpdate        EventMessage = "object_remove_update"
 	ObjectFailed              EventMessage = "object_failed"
 	ContactAddUpdate          EventMessage = "contact_add_update"
@@ -50,6 +51,7 @@ var AllEventMessages = []struct {
 	{HeadRetrieved, "HeadRetrieved"},
 	{ContainerRemoveUpdate, "ContainerRemoveUpdate"},
 	{ObjectAddUpdate, "ObjectAddUpdate"},
+	{ObjectRangeUpdate, "ObjectRangeUpdate"},
 	{ObjectRemoveUpdate, "ObjectRemoveUpdate"},
 	{ObjectFailed, "ObjectFailed"},
 	{ContactAddUpdate, "ContactAddUpdate"},

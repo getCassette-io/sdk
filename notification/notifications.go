@@ -155,6 +155,8 @@ func (m NotificationManager) ListenAndEmit() {
 
 		for {
 			select {
+			case <-m.ctx.Done():
+				return
 			case not, ok := <-m.notificationCh:
 				if !ok {
 					fmt.Println("Notification channel closed, exiting ListenAndEmit")

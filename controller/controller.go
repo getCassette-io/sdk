@@ -764,13 +764,16 @@ func objectActionCaller(wg *waitgroup.WG, ctx context.Context, p object.ObjectPa
 	return err
 }
 
+func quickContainerHead(ctx context.Context, cid cid.ID, pl *pool.Pool) (container.Container, error) {
+	containerCaller := &container.ContainerCaller{}
+	return containerCaller.SynchronousContainerHead(ctx, cid, pl)
+}
+
 // PerformObjectAction is partnered with any 'event' that requires and action from the user and could take a while.
 // It runs the action that is stored, related to the payload that has been sent to the frontend.
 func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, cancelCtx context.CancelFunc, p payload.Parameters, action ObjectActionType) error {
 	//fmt.Println("4. c.wallet PerformObjectAction", c.wallet)
-	if c.wallet == nil {
-		return errors.New(utils.ErrorNoSession)
-	}
+
 	var cnrId cid.ID
 	err := cnrId.DecodeString(p.ParentID())
 	if err != nil {
@@ -818,6 +821,27 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 		return err
 	}
 
+	quickContainer, err := quickContainerHead(ctx, cnrId, objectParameters.Pl)
+	if err != nil {
+		//could not retrieve the permissions for container
+		errors.New(utils.ErrorNotObject)
+	}
+
+	for _, e := range quickContainer.ExtendedACL.Records {
+		if e.Operation == objectParameters.ActionOperation {
+			if e.Action == eacl.ActionAllow {
+				//we can access the head of the objects. We can continue without a token
+				//around here we need to check the permissions otherwise this is doomed to fail in public mode
+				if err := objectActionCaller(wg, ctx, objectParameters, actionChan, nil, action); err != nil {
+					fmt.Println("unauthorized access failed attempting ", objectParameters.ActionOperation, err)
+					return err
+				} else {
+					return nil
+				}
+			}
+		}
+	}
+
 	/*
 		1. if we have a token, just use it
 	*/
@@ -827,14 +851,15 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 		}
 		return nil // this task has been triggered. No need to continue
 	}
-	/*
-		2. try accessing the object directly
-	*/
-	if err := objectActionCaller(wg, ctx, objectParameters, actionChan, nil, action); err != nil {
-		fmt.Println("unauthorized access failed. Attemting auth'd access")
-	} else {
-		return nil
-	}
+	///*
+	//	2. try accessing the object directly
+	//*/
+	//if err := objectActionCaller(wg, ctx, objectParameters, actionChan, nil, action); err != nil {
+	//	fmt.Println("unauthorized access failed. Attemting auth'd access")
+	//	return errors.New(utils.ErrorNoSession)
+	//} else {
+	//	return nil
+	//}
 	/*
 		3. ok we are going to need to request a signature.
 	*/

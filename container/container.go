@@ -50,16 +50,16 @@ const (
 )
 
 type ContainerParameter struct {
-	Id          string
-	Description string
-	PublicKey   ecdsa.PublicKey
-	GateAccount *wallet.Account
-	Pl          *pool.Pool
-	Verb        session.ContainerVerb
-	Permission  acl.Basic
-	Ctx         context.Context
-	Session     bool
-
+	Id               string
+	Description      string
+	PublicKey        ecdsa.PublicKey
+	GateAccount      *wallet.Account
+	Pl               *pool.Pool
+	Verb             session.ContainerVerb
+	Permission       acl.Basic
+	Ctx              context.Context
+	Session          bool
+	ContainerSubject string
 	//objectEmitter is used for sending an update of the state of the object's action, e.g send a message that an object has been downloaded.
 	//the emitter will be responsible for keeping the UI update on changes. It is not responsible for uniqueness etc
 	ContainerEmitter emitter.Emitter
@@ -380,7 +380,6 @@ func (o *ContainerCaller) Create(wg *waitgroup.WG, ctx context.Context, p Contai
 	var pp netmap.PlacementPolicy
 	pp.SetContainerBackupFactor(1)
 	pp.SetReplicas([]netmap.ReplicaDescriptor{rd})
-
 	cnr.SetPlacementPolicy(storagePolicy)
 	//this should set user specific attributes and not default attributes. I.e block attributes that are 'reserved
 	for k, v := range p.Attrs {
@@ -389,6 +388,7 @@ func (o *ContainerCaller) Create(wg *waitgroup.WG, ctx context.Context, p Contai
 		}
 		cnr.SetAttribute(k, v)
 	}
+
 	fmt.Println("time check ", creationTime, fmt.Sprint(creationTime.Unix()), strconv.FormatInt(time.Now().Unix(), 10))
 	createdAt := time.Now().Unix()
 	cnr.SetName(p.Description) //name
@@ -584,10 +584,14 @@ func (o *ContainerCaller) Head(wg *waitgroup.WG, ctx context.Context, p Containe
 
 // List responds with all the IDs of containers owned by the public key.
 func (o *ContainerCaller) List(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error {
-	userID := user.ResolveFromECDSAPublicKey(p.PublicKey)
-	fmt.Println("user listing containers", userID)
+	var issuer user.ID
+	err := issuer.DecodeString(p.ContainerSubject)
+	if err != nil {
+		issuer = user.ResolveFromECDSAPublicKey(p.PublicKey)
+	}
+	fmt.Println("user listing containers", issuer)
 	lst := client.PrmContainerList{}
-	r, err := p.Pl.ContainerList(ctx, userID, lst)
+	r, err := p.Pl.ContainerList(ctx, issuer, lst)
 	if err != nil {
 		actionChan <- o.Notification(
 			"Could not list containers",

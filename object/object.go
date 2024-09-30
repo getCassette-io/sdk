@@ -14,7 +14,6 @@ import (
 	"github.com/configwizard/sdk/utils"
 	"github.com/configwizard/sdk/waitgroup"
 	"github.com/nspcc-dev/neo-go/pkg/wallet"
-	"github.com/nspcc-dev/neofs-sdk-go/bearer"
 	"github.com/nspcc-dev/neofs-sdk-go/client"
 	apistatus "github.com/nspcc-dev/neofs-sdk-go/client/status"
 	cid "github.com/nspcc-dev/neofs-sdk-go/container/id"
@@ -367,6 +366,51 @@ func (o *ObjectCaller) List(wg *waitgroup.WG, ctx context.Context, p payload.Par
 	return iterationError
 }
 
+func Ranger(ctx context.Context, params ObjectParameter, token tokens.Token) error {
+	var objID oid.ID
+	if err := objID.DecodeString(params.ID()); err != nil {
+		fmt.Println("wrong object Id", err)
+		return err
+	}
+	var cnrID cid.ID
+	if err := cnrID.DecodeString(params.ParentID()); err != nil {
+		fmt.Println("wrong container Id", err)
+		return err
+	}
+	gA, err := params.ForUser()
+	if err != nil {
+		return err
+	}
+	gateSigner := user.NewAutoIDSigner(gA.PrivateKey().PrivateKey) //fix me is this correct signer?
+	rangeInit := client.PrmObjectRange{}
+	if token != nil {
+		if tok, ok := token.(*tokens.BearerToken); !ok {
+			if tok, ok := token.(*tokens.PrivateBearerToken); !ok {
+				return errors.New("no bearer token provided")
+			} else {
+				rangeInit.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
+			}
+		} else {
+			rangeInit.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
+		}
+	}
+	offset := uint64(100)
+	length := uint64(100)
+	objRangeReader, err := params.Pool().ObjectRangeInit(ctx, cnrID, objID, offset, length, gateSigner, rangeInit)
+	if err != nil {
+		log.Println("error creating object reader ", err)
+		return err
+	}
+
+	var buf []byte
+	_, err = objRangeReader.Read(buf)
+	if err != nil {
+		return err
+	}
+	params.ObjectEmitter.Emit(ctx, emitter.ObjectRangeUpdate, buf)
+	return nil
+}
+
 // tmpPreRequisite should be run before trying to retrieve an object. It provides the size of the object and the reader that will do the retrieval.
 func InitReader(ctx context.Context, params ObjectParameter, token tokens.Token) (object.Object, io.ReadCloser, error) {
 	var objID oid.ID
@@ -542,7 +586,7 @@ func (o ObjectCaller) Create(wg *waitgroup.WG, ctx context.Context, p payload.Pa
 		}
 	}
 
-	fmt.Println("writing init completed, beginning data transfer")
+	fmt.Println("Alex - writing init completed, beginning data transfer")
 	buf := make([]byte, 1024)
 	for {
 		n, err := p.Read(buf)
@@ -570,20 +614,6 @@ func (o ObjectCaller) Create(wg *waitgroup.WG, ctx context.Context, p payload.Pa
 		}
 	}
 
-	var bearerToken *bearer.Token
-	if tok, ok := token.(*tokens.BearerToken); !ok {
-		if tok, ok := token.(*tokens.PrivateBearerToken); !ok {
-			return errors.New("no bearer token provided")
-		} else {
-			bearerToken = tok.BearerToken
-		}
-	} else {
-		bearerToken = tok.BearerToken
-	}
-	if !bearerToken.VerifySignature() {
-		return errors.New("token not verified")
-	}
-
 	var payloadWriter *slicer.PayloadWriter
 	if payloadWriter, ok = objectParameters.WriteCloser.(*slicer.PayloadWriter); !ok {
 		actionChan <- o.Notification(
@@ -609,14 +639,18 @@ func (o ObjectCaller) Create(wg *waitgroup.WG, ctx context.Context, p payload.Pa
 		ParentID: p.ParentID(),
 		Id:       payloadWriter.ID().String(), //fixme - find out how objectParameters.ID is the old ID....
 	}
+	fmt.Println("local", localObject)
 	if err := objectParameters.ObjectEmitter.Emit(ctx, emitter.ObjectAddUpdate, localObject); err != nil {
 		fmt.Println("could not emit add update ", err)
 	}
+	fmt.Println("notifying now")
+
 	actionChan <- o.Notification(
 		"upload complete!",
 		"object "+objectParameters.Id+" completed", //we gleaned the ID during the write initiator.
 		notification.Success,
 		notification.ActionToast)
+	fmt.Println("returning now")
 	return nil
 }
 
@@ -628,4 +662,10 @@ type Object struct {
 	Attributes  map[string]string `json:"attributes"`
 	Size        uint64            `json:"size"`
 	CreatedAt   int64             `json:"CreatedAt"`
+}
+
+type ObjectRange struct {
+	Offset uint64 `json:"offset"`
+	Limit  uint64 `json:"limit"`
+	Data   []byte `json:"data"`
 }

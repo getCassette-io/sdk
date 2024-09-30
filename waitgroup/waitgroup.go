@@ -22,7 +22,9 @@ func NewWaitGroup(logger *log.Logger) *WG {
 		mu:     &sync.RWMutex{},
 	}
 }
-
+func (w *WG) WaitGroup() *sync.WaitGroup {
+	return w.wg
+}
 func (w *WG) Add(i int, msg string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
