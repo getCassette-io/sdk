@@ -512,10 +512,7 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 	fmt.Printf("performing container action  %T -- %s\r\n", action, utils.GetCallerFunctionName())
 	defer cancelCtx()
 	var actionChan = make(chan notification.NewNotification)
-	// here we check whether we should run the action directly (for whatever reason)
-	if c.wallet == nil {
-		return errors.New(utils.ErrorNoSession)
-	}
+
 	wgMessage := "container_action_chan-" + p.ID() + "_" + utils.GetCurrentFunctionName()
 	wg.Add(1, wgMessage)
 	go func() { //todo - this is done in both action functions
@@ -596,7 +593,10 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 	//} else {
 	//	return nil
 	//}
-
+	// here we check whether we should run the action directly (for whatever reason)
+	if c.wallet == nil {
+		return errors.New(utils.ErrorNoSession)
+	}
 	if containerParameters.Session { //forcing the creation of new session token for containers every time?
 		fmt.Println("just going to always force session token creation")
 	} else {
@@ -784,17 +784,17 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 	var actionChan = make(chan notification.NewNotification)
 	wgMessage := "action_chan-" + p.Name() + "_" + utils.GetCurrentFunctionName()
 	wg.Add(1, wgMessage)
-	c.logger.Println("3.1 starting action chan handler")
+	//c.logger.Println("3.1 starting action chan handler")
 	go func() {
 		defer wg.Done(wgMessage)
 		for { //listen forever
 			select {
 			case <-ctx.Done():
-				c.logger.Println("3 closed action chan handler")
+				//c.logger.Println("3 closed action chan handler")
 				return
 			case not, ok := <-actionChan:
 				if !ok {
-					fmt.Println("action chan believed to be closed")
+					//fmt.Println("action chan believed to be closed")
 					return
 				}
 				c.logger.Println("success type, creating notification for database")
@@ -841,7 +841,9 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 			}
 		}
 	}
-
+	if c.wallet == nil {
+		return errors.New(utils.ErrorNoSession)
+	}
 	/*
 		1. if we have a token, just use it
 	*/
@@ -978,10 +980,6 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 	if err := c.SignRequest(neoFSPayload); err != nil {
 		return err
 	}
-	go func() {
-		time.Sleep(5 * time.Second)
-		fmt.Println("GROUPS - ", len(wg.Groups()), wg.Groups())
-	}()
 	wg.Wait()
 	c.logger.Println("FINISH closed action ", action)
 	fmt.Println("groups - ", wg.Groups())

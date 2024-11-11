@@ -29,6 +29,7 @@ import (
 	"github.com/nspcc-dev/neofs-sdk-go/user"
 	"github.com/nspcc-dev/neofs-sdk-go/waiter"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -382,9 +383,13 @@ func (o *ContainerCaller) Create(wg *waitgroup.WG, ctx context.Context, p Contai
 	pp.SetReplicas([]netmap.ReplicaDescriptor{rd})
 	cnr.SetPlacementPolicy(storagePolicy)
 	//this should set user specific attributes and not default attributes. I.e block attributes that are 'reserved
+	var domain string
 	for k, v := range p.Attrs {
 		if k == "" || v == "" {
 			continue
+		}
+		if k == "DOMAIN" && strings.HasSuffix(v, ".neo") {
+			domain = v
 		}
 		cnr.SetAttribute(k, v)
 	}
@@ -436,7 +441,7 @@ func (o *ContainerCaller) Create(wg *waitgroup.WG, ctx context.Context, p Contai
 		Id:         idCnr.String(),
 		Attributes: p.Attrs,
 		BasicACL:   uint32(p.Permission),
-		//DomainName: remoteContainer.ReadDomain().Name(), //fixme = domains
+		DomainName: domain, //fixme = domains
 		//DomainZone: remoteContainer.ReadDomain().Zone(),
 		CreatedAt: createdAt,
 	}
@@ -455,6 +460,7 @@ func (o *ContainerCaller) Create(wg *waitgroup.WG, ctx context.Context, p Contai
 		notification.ActionToast)
 	return nil
 }
+
 func (o *ContainerCaller) Restrict(wg *waitgroup.WG, ctx context.Context, p ContainerParameter, actionChan chan notification.NewNotification, token tokens.Token) error {
 	var cnrId cid.ID
 	if err := cnrId.DecodeString(p.Id); err != nil {
@@ -519,6 +525,10 @@ func (o *ContainerCaller) SynchronousContainerHead(ctx context.Context, cnrId ci
 		return localContainer, err
 	}
 
+	var domain string
+	if strings.HasSuffix(remoteContainer.Attribute("DOMAIN"), ".neo") {
+		domain = remoteContainer.Attribute("DOMAIN")
+	}
 	//t, err := time.Parse(time.RFC3339, remoteContainer.CreatedAt().Unix())
 	//head is going to send a container object, just this time with the content populated
 	localContainer = Container{
@@ -526,7 +536,7 @@ func (o *ContainerCaller) SynchronousContainerHead(ctx context.Context, cnrId ci
 		Name:       remoteContainer.Name(),
 		Id:         cnrId.String(),
 		Attributes: make(map[string]string),
-		DomainName: remoteContainer.ReadDomain().Name(),
+		DomainName: domain,
 		DomainZone: remoteContainer.ReadDomain().Zone(),
 		CreatedAt:  remoteContainer.CreatedAt().Unix(),
 	}
@@ -667,10 +677,6 @@ func (c *ContainerCaller) Read(wg *waitgroup.WG, ctx context.Context, p Containe
 		return err
 	}
 	if err = init.Iterate(func(id oid.ID) bool {
-		fmt.Println("received ", id.String())
-		//similar to containers, we need to get the head of an object now.
-		//the container emitter can inform an object emitter (if needs be) that a new object is available for the UI
-		//before retrieving data about the object.
 		if err := p.ContainerEmitter.Emit(ctx, emitter.ObjectAddUpdate, object2.Object{Id: id.String(), ParentID: cnrId.String()}); err != nil {
 			fmt.Println("emitting object from iterator error ", err)
 			actionChan <- c.Notification(

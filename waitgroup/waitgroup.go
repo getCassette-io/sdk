@@ -66,6 +66,6 @@ func (w *WG) Wait() {
 
 // log is a helper method for logging group changes.
 func (w *WG) log(action, msg string) {
-	keys := maps.Keys(w.groups)
-	w.logger.Printf("[%s] %s: %s, groups size: %d, keys: %+v\n", time.Now().Format(time.RFC3339), action, msg, len(w.groups), keys)
+	//keys := maps.Keys(w.groups)
+	//w.logger.Printf("[%s] %s: %s, groups size: %d, keys: %+v\n", time.Now().Format(time.RFC3339), action, msg, len(w.groups), keys)
 }

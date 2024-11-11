@@ -23,6 +23,7 @@ import (
 	"github.com/nspcc-dev/neofs-sdk-go/object/slicer"
 	"github.com/nspcc-dev/neofs-sdk-go/pool"
 	"github.com/nspcc-dev/neofs-sdk-go/user"
+	"go.uber.org/zap"
 	"io"
 	"log"
 	"strconv"
@@ -31,6 +32,7 @@ import (
 
 type ObjectAction interface {
 	SynchronousObjectHead(ctx context.Context, cnrId cid.ID, objID oid.ID, signer user.Signer, pl *pool.Pool) (Object, error)
+	SearchHeadByAttribute(ctx context.Context, cnrId cid.ID, attribute object.Attribute, signer user.Signer, pl *pool.Pool) (Object, error)
 	Head(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error
 	Create(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error
 	Read(wg *waitgroup.WG, ctx context.Context, p payload.Parameters, actionChan chan notification.NewNotification, token tokens.Token) error
@@ -366,6 +368,69 @@ func (o *ObjectCaller) List(wg *waitgroup.WG, ctx context.Context, p payload.Par
 	return iterationError
 }
 
+// search a container by attribute -- currently only for public requests through the browser.
+func (o *ObjectCaller) SearchHeadByAttribute(ctx context.Context, cnrID cid.ID, attr object.Attribute, signer user.Signer, pl *pool.Pool) (Object, error) {
+	//var cnrID cid.ID
+	//if err := cnrID.DecodeString(params.ParentID()); err != nil {
+	//	fmt.Println("wrong container Id", err)
+	//	return Object{}, err
+	//}
+
+	//if len(params.Attributes()) == 0 {
+	//	return Object{}, errors.New("need an attribute to search by")
+	//}
+	//filter only by single attribute for now
+	//attribute := params.Attributes()[0]
+	filters := object.NewSearchFilters()
+	filters.AddRootFilter()
+	filters.AddFilter(attr.Key(), attr.Value(), object.MatchStringEqual)
+
+	var prm client.PrmObjectSearch
+	prm.SetFilters(filters)
+	//gA, err := params.ForUser()
+	//if err != nil {
+	//	return Object{}, err
+	//}
+	//gateSigner := user.NewAutoIDSigner(gA.PrivateKey().PrivateKey) //fix me is this correct signer?
+	//rangeInit := client.PrmObjectRange{}
+	//if token != nil {
+	//	if tok, ok := token.(*tokens.BearerToken); !ok {
+	//		if tok, ok := token.(*tokens.PrivateBearerToken); !ok {
+	//			return Object{}, errors.New("no bearer token provided")
+	//		} else {
+	//			rangeInit.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
+	//		}
+	//	} else {
+	//		rangeInit.WithBearerToken(*tok.BearerToken) //now we know its a bearer token we can extract it
+	//	}
+	//}
+	res, err := pl.ObjectSearchInit(ctx, cnrID, signer, prm)
+	if err != nil {
+		return Object{}, err
+	}
+	defer func() {
+		if err = res.Close(); err != nil {
+			zap.L().Error("failed to close resource", zap.Error(err))
+		}
+	}()
+
+	buf := make([]oid.ID, 1)
+
+	n, _ := res.Read(buf)
+	if n == 0 {
+		err = res.Close()
+
+		if err == nil || errors.Is(err, io.EOF) {
+			return Object{}, errors.New("object not found")
+		}
+		return Object{}, errors.New("read object list failed")
+	}
+	//possibly convoluted as its an ID anyway, but whatevs. Stolen from rest API
+	var addrObj oid.Address
+	addrObj.SetContainer(cnrID)
+	addrObj.SetObject(buf[0])
+	return o.SynchronousObjectHead(ctx, cnrID, addrObj.Object(), signer, pl)
+}
 func Ranger(ctx context.Context, params ObjectParameter, token tokens.Token) error {
 	var objID oid.ID
 	if err := objID.DecodeString(params.ID()); err != nil {
@@ -586,7 +651,6 @@ func (o ObjectCaller) Create(wg *waitgroup.WG, ctx context.Context, p payload.Pa
 		}
 	}
 
-	fmt.Println("Alex - writing init completed, beginning data transfer")
 	buf := make([]byte, 1024)
 	for {
 		n, err := p.Read(buf)
