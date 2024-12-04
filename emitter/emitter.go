@@ -15,6 +15,7 @@ const (
 	BalanceUpdate             EventMessage = "balance_update"
 	BalanceError              EventMessage = "balance_error"
 	RequestTransaction        EventMessage = "request_transaction"
+	RequestDomainPurchase     EventMessage = "request_domain_purchase"
 	RequestSign               EventMessage = "request_sign_payload"
 	ResponseSign              EventMessage = "response_sign_payload"
 	RequestAuthenticate       EventMessage = "request_authenticate"
@@ -42,6 +43,7 @@ var AllEventMessages = []struct {
 	{BalanceUpdate, "BalanceUpdate"},
 	{BalanceError, "BalanceError"},
 	{RequestTransaction, "RequestTransaction"},
+	{RequestDomainPurchase, "RequestDomainPurchase"},
 	{RequestSign, "RequestSign"},
 	{ResponseSign, "ResponseSign"},
 	{RequestAuthenticate, "RequestAuthenticate"},
