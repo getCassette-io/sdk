@@ -612,7 +612,6 @@ func (o *ContainerCaller) List(wg *waitgroup.WG, ctx context.Context, p Containe
 	}
 	//we need to now emit this list one at a time as we receive them (or as one array?)
 	for _, v := range r { //we can manage this synchronously i believe.
-		fmt.Printf("emitting here %+v\r\n", v.String())
 		err := p.ContainerEmitter.Emit(ctx, emitter.ContainerAddUpdate, Container{Id: v.String()})
 		if err != nil {
 			fmt.Println("error emitting new object ", p)

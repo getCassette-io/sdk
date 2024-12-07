@@ -81,7 +81,6 @@ func (o *MockContainer) List(wg *waitgroup.WG, ctx context.Context, p ContainerP
 	listContainerContent := views.SimulateNeoFS(views.Containers, "") //search by container ID (
 	//we need to now emit this list one at a time as we receive them (or as one array?)
 	for _, v := range listContainerContent {
-		fmt.Printf("emitting here %+v\r\n", v)
 		err := p.ContainerEmitter.Emit(ctx, emitter.ContainerAddUpdate, Container{Id: v.ID})
 		if err != nil {
 			fmt.Println("error listing new container ", p)

@@ -509,7 +509,6 @@ func containerActionCaller(wg *waitgroup.WG, ctx context.Context, p container.Co
 	return err
 }
 func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Context, cancelCtx context.CancelFunc, p payload.Parameters, action ContainerActionType) error {
-	fmt.Printf("performing container action  %T -- %s\r\n", action, utils.GetCallerFunctionName())
 	defer cancelCtx()
 	var actionChan = make(chan notification.NewNotification)
 
@@ -527,7 +526,6 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 					fmt.Println("action chan believed to be closed")
 					return
 				}
-				c.logger.Println("success type, creating notification for database")
 				if not.Type == notification.Success { //do this before sending the notification success
 					if err := c.DB.Create(database.NotificationBucket, p.ID(), []byte{}); err != nil {
 						c.Notifier.QueueNotification(c.Notifier.Notification(
@@ -550,7 +548,6 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 	}
 	var cnrId cid.ID
 	if err := cnrId.DecodeString(p.ID()); err != nil || containerParameters.Verb == 0 { //unknown verb for container unnamed
-		fmt.Println("verb is empty. We are going to just attempt the action directly.")
 		//no container ID. lets try anyway
 		if err != nil {
 			//we don't have a container. This must be a container only action like a list.
@@ -561,9 +558,7 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 
 			return err
 		}
-		fmt.Println("waiting for action to complete...")
 		wg.Wait()
-		fmt.Println("finished waiting for action to complete...")
 		return nil
 	}
 	/*
@@ -797,7 +792,6 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 					//fmt.Println("action chan believed to be closed")
 					return
 				}
-				c.logger.Println("success type, creating notification for database")
 				if not.Type == notification.Success { //do this before sending the notification success
 					if err := c.DB.Create(database.NotificationBucket, p.ID(), []byte{}); err != nil {
 						c.Notifier.QueueNotification(c.Notifier.Notification(

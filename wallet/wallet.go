@@ -172,13 +172,11 @@ func ListenForWalletGasChanges(ctx context.Context, wsC *client.WSClient, addres
 	// Listen for notifications
 	go func() {
 		for notification := range notificationChannel {
-			fmt.Printf("Notification received: %+v\n", notification)
 			var te nep17.TransferEvent
 			err = te.FromStackItem(notification.Item)
 			from := Uint160ToString(te.From)
 			to := Uint160ToString(te.To)
 			if from == address || to == address {
-				fmt.Printf("transfer event from %s - to %s- %+v\n", from, to, te)
 				received <- te
 			}
 		}

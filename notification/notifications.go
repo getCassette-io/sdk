@@ -128,7 +128,6 @@ func (m NotificationManager) End() {
 }
 func (m NotificationManager) Notification(title, description, typez string, action NotificationType) NewNotification {
 	identifier := m.IDGenerator()
-	fmt.Println("notification identifier ", identifier)
 	return NewNotification{
 		Id:          identifier,
 		Title:       title,
