@@ -5,14 +5,16 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"sync"
+
 	"github.com/configwizard/sdk/payload"
 	"github.com/configwizard/sdk/utils"
 	"github.com/google/uuid"
 	"github.com/nspcc-dev/neo-go/pkg/crypto/keys"
 	"github.com/nspcc-dev/neo-go/pkg/wallet"
-	"github.com/nspcc-dev/neofs-api-go/v2/acl"
-	"github.com/nspcc-dev/neofs-api-go/v2/refs"
-	session2 "github.com/nspcc-dev/neofs-api-go/v2/session"
 	"github.com/nspcc-dev/neofs-sdk-go/bearer"
 	cid "github.com/nspcc-dev/neofs-sdk-go/container/id"
 	neofscrypto "github.com/nspcc-dev/neofs-sdk-go/crypto"
@@ -20,10 +22,6 @@ import (
 	"github.com/nspcc-dev/neofs-sdk-go/eacl"
 	"github.com/nspcc-dev/neofs-sdk-go/session"
 	"github.com/nspcc-dev/neofs-sdk-go/user"
-	"log"
-	"strconv"
-	"strings"
-	"sync"
 )
 
 const (
@@ -62,19 +60,22 @@ func (m PrivateContainerSessionToken) Sign(issuerAddress string, signedPayload p
 		return err
 	}
 	fmt.Println("decodedSignature", decodedSignature)
-	signature := refs.Signature{}
-	signature.SetSign(decodedSignature)
-	signature.SetScheme(refs.ECDSA_RFC6979_SHA256)
 
 	bytesPublicKey, err := hex.DecodeString(signedPayload.Signature.HexPublicKey)
-	signature.SetKey(bytesPublicKey)
+	if err != nil {
+		return err
+	}
 	fmt.Println("wallet ", m.Wallet, signedPayload.Signature.HexPublicKey)
 
-	var b session2.Token
-	m.SessionToken.WriteToV2(&b) //convert the token to a v2 type
-	b.SetSignature(&signature)   //so that we can sgn it
+	var pubKey neofsecdsa.PublicKey
+	if err := pubKey.Decode(bytesPublicKey); err != nil {
+		return err
+	}
 
-	if err := m.SessionToken.ReadFromV2(b); err != nil {
+	staticSigner := neofscrypto.NewStaticSigner(neofscrypto.ECDSA_DETERMINISTIC_SHA256, decodedSignature, &pubKey)
+	issuer := user.ResolveFromECDSAPublicKey(ecdsa.PublicKey(pubKey))
+
+	if err := m.SessionToken.Sign(user.NewSigner(staticSigner, issuer)); err != nil {
 		fmt.Println("tried reading ", err)
 		return err
 	}
@@ -118,21 +119,26 @@ func (m PrivateBearerToken) Sign(issuerAddress string, signedPayload payload.Pay
 		return err
 	}
 	fmt.Println("decodedSignature", decodedSignature)
-	signature := refs.Signature{}
-	signature.SetSign(decodedSignature)
-	signature.SetScheme(refs.ECDSA_RFC6979_SHA256)
 
 	bytesPublicKey, err := hex.DecodeString(signedPayload.Signature.HexPublicKey)
-	signature.SetKey(bytesPublicKey)
+	if err != nil {
+		return err
+	}
 	fmt.Println("wallet ", m.Wallet, signedPayload.Signature.HexPublicKey)
-	var b acl.BearerToken
-	m.BearerToken.WriteToV2(&b) //convert the token to a v2 type
-	b.SetSignature(&signature)  //so that we can sgn it
-	//then read it back into a 'new' type
-	if err := m.BearerToken.ReadFromV2(b); err != nil {
+
+	var pubKey neofsecdsa.PublicKey
+	if err := pubKey.Decode(bytesPublicKey); err != nil {
+		return err
+	}
+
+	staticSigner := neofscrypto.NewStaticSigner(neofscrypto.ECDSA_DETERMINISTIC_SHA256, decodedSignature, &pubKey)
+	issuer := user.ResolveFromECDSAPublicKey(ecdsa.PublicKey(pubKey))
+
+	if err := m.BearerToken.Sign(user.NewSigner(staticSigner, issuer)); err != nil {
 		fmt.Println("tried reading ", err)
 		return err
 	}
+
 	if !m.BearerToken.VerifySignature() {
 		fmt.Println("not signed")
 		return errors.New("token not signed")

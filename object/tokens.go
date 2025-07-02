@@ -77,6 +77,6 @@ func ObjectBearerToken(cnrID cid.ID, p payload.Parameters, issuerKey keys.Public
 	bearerToken.SetEACLTable(tab)
 	var issuer user.ID
 	issuer = user.ResolveFromECDSAPublicKey(ecdsa.PublicKey(issuerKey))
-	bearerToken.SetIssuer(issuer)
+	bearerToken.ForUser(issuer)
 	return bearerToken, nil
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/configwizard/sdk/container"
 	"github.com/configwizard/sdk/controller"
+	"github.com/configwizard/sdk/database"
 	"github.com/configwizard/sdk/emitter"
 	"github.com/configwizard/sdk/notification"
 	obj "github.com/configwizard/sdk/object"
@@ -36,7 +37,7 @@ type actionCompletedMsg struct {
 	err error
 }
 type progressUpdateMsg struct {
-	progress ProgressMessage
+	progress notification.ProgressMessage
 }
 type sessionState uint
 
@@ -71,7 +72,7 @@ type model struct {
 	state                               sessionState //manage the state of the UI (which view etc)
 	containerListTable, objectListTable table.Model
 	progressBar                         ProgressBar
-	progressChan                        chan ProgressMessage
+	progressChan                        chan notification.ProgressMessage
 	webInput                            string
 	loading                             bool
 	inputChan                           chan string
@@ -91,7 +92,7 @@ func (m model) Init() tea.Cmd {
 }
 
 // this waits to update the visible progress bar
-func waitForDownloadProgress(progressChan chan ProgressMessage) tea.Cmd {
+func waitForDownloadProgress(progressChan chan notification.ProgressMessage) tea.Cmd {
 	return func() tea.Msg {
 		return progressUpdateMsg{progress: <-progressChan}
 	}
@@ -110,7 +111,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Send a message to the main program
 		logger.Println("m.state", m.state)
-		m.progressBar.SetProgress(ProgressMessage{
+		m.progressBar.SetProgress(notification.ProgressMessage{
 			Progress: 0,
 		})
 		logger.Println("m.progressBar.Value()", m.progressBar.Value())
@@ -552,7 +553,14 @@ func main() {
 	progressChan := make(chan notification.ProgressMessage)
 
 	pEmitter := notification.NewUIProgressEvent("progress channel", progressChan)
-	c, err := controller.NewMockController(pEmitter, utils.MainNet, logger)
+
+	wg := waitgroup.NewWaitGroup(logger)
+	ctx := context.Background()
+	var network utils.Network
+	var notifier notification.Notifier
+	var store database.Store
+
+	c, err := controller.NewMockController(wg.WaitGroup(), ctx, pEmitter, network, notifier, store, logger)
 	if err != nil {
 		log.Fatal(err)
 	}
