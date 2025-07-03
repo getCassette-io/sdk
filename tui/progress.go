@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/configwizard/sdk/notification"
 	"time"
 )
 
@@ -9,7 +10,7 @@ type ProgressBar interface {
 	// Increment the progress by a given amount
 	Increment(int)
 	// Set the progress to a specific value
-	SetProgress(ProgressMessage)
+	SetProgress(notification.ProgressMessage)
 	// Get the current progress value
 	Value() int
 	// View returns the string representation of the progress bar
@@ -49,7 +50,7 @@ func (p *SimpleProgressBar) Increment(amount int) {
 	}
 }
 
-func (p *SimpleProgressBar) SetProgress(prog ProgressMessage) {
+func (p *SimpleProgressBar) SetProgress(prog notification.ProgressMessage) {
 	p.title = prog.Title
 	p.progress = prog.Progress
 	if p.progress > p.total {
