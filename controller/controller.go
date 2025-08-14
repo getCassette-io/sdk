@@ -451,6 +451,7 @@ func (c *Controller) UpdateFromPrivateKey(signedPayload payload.Payload) error {
 		updatedPayload.Signature = &payload.Signature{}
 		updatedPayload.Signature.HexSignature = signedPayload.Signature.HexSignature
 		updatedPayload.Signature.HexPublicKey = signedPayload.Signature.HexPublicKey
+		//updatedPayload.Signature.HexSalt = signedPayload.Signature.HexSalt // the salt is note set here, uncomment this line if there an issue with it
 		// Update the map with the new struct
 		c.pendingEvents[payload.UUID(signedPayload.Uid)] = updatedPayload
 		// Notify through the channel
@@ -890,7 +891,21 @@ func (c *Controller) PerformObjectAction(wg *waitgroup.WG, ctx context.Context, 
 	//if err != nil {
 	//	return err
 	//}
-	bearerToken := &tokens.BearerToken{BearerToken: &bt}
+	var bearerToken tokens.Token
+	switch c.TokenManager.Type() {
+	case tokens.TypePrivateTokenManager:
+		// Attempt to cast 'token' to '*tokens.PrivateContainerSessionToken'
+		if tokManager, ok := c.TokenManager.(*tokens.PrivateKeyTokenManager); ok {
+			privateBearerToken := tokManager.PopulatePrivateBearerToken(bt)
+			bearerToken = &privateBearerToken
+		} else {
+			fmt.Println("weird error. Shouldn't be here, no token manager")
+			panic("no token manager - odd error")
+		}
+
+	default:
+		bearerToken = &tokens.BearerToken{BearerToken: &bt}
+	}
 	//bearerToken, err := c.TokenManager.NewBearerToken(bt.EACLTable(), iAt, iAt, exp, key.PublicKey()) //mock this out for different wallet types
 	//if err != nil {
 	//	return err

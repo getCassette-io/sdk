@@ -54,34 +54,41 @@ func (m PrivateContainerSessionToken) InvalidAt(epoch uint64) bool {
 	return false
 }
 func (m PrivateContainerSessionToken) Sign(issuerAddress string, signedPayload payload.Payload) error {
-	decodedSignature, err := hex.DecodeString(signedPayload.Signature.HexSignature)
+	if m.SessionToken == nil {
+		return errors.New(utils.ErrorNoToken)
+	}
+	if signedPayload.Signature == nil {
+		return errors.New(utils.ErrorNoSignature)
+	}
+	bPubKey, err := hex.DecodeString(signedPayload.Signature.HexPublicKey)
 	if err != nil {
-		fmt.Println("error signing ", err)
 		return err
 	}
-	fmt.Println("decodedSignature", decodedSignature)
+	var pubKey neofsecdsa.PublicKeyWalletConnect
+	if err := pubKey.Decode(bPubKey); err != nil {
+		return err
+	}
+	ecdsaKey := (ecdsa.PublicKey)(pubKey)
 
-	bytesPublicKey, err := hex.DecodeString(signedPayload.Signature.HexPublicKey)
+	issuer := user.ResolveFromECDSAPublicKey(ecdsaKey)
+
+	bSig, err := hex.DecodeString(signedPayload.Signature.HexSignature)
 	if err != nil {
+		fmt.Println("error decoding hex signature", err)
 		return err
 	}
-	fmt.Println("wallet ", m.Wallet, signedPayload.Signature.HexPublicKey)
-
-	var pubKey neofsecdsa.PublicKey
-	if err := pubKey.Decode(bytesPublicKey); err != nil {
+	salt, err := hex.DecodeString(signedPayload.Signature.HexSalt)
+	if err != nil {
+		fmt.Println("error decoding hex salt", err)
 		return err
 	}
-
-	staticSigner := neofscrypto.NewStaticSigner(neofscrypto.ECDSA_DETERMINISTIC_SHA256, decodedSignature, &pubKey)
-	issuer := user.ResolveFromECDSAPublicKey(ecdsa.PublicKey(pubKey))
-
-	if err := m.SessionToken.Sign(user.NewSigner(staticSigner, issuer)); err != nil {
-		fmt.Println("tried reading ", err)
+	staticSigner := neofscrypto.NewStaticSigner(neofscrypto.ECDSA_DETERMINISTIC_SHA256, append(bSig, salt...), &pubKey)
+	err = m.SessionToken.Sign(user.NewSigner(staticSigner, issuer))
+	if err != nil {
 		return err
 	}
 	if !m.SessionToken.VerifySignature() {
-		fmt.Println("not signed")
-		return errors.New("token not signed")
+		return errors.New(utils.ErrorNoSignature)
 	}
 	return nil
 }
@@ -113,35 +120,29 @@ func (m PrivateBearerToken) InvalidAt(epoch uint64) bool {
 		return bt.Sign(e) //is this the owner who is giving access priveliges???
 */
 func (m PrivateBearerToken) Sign(issuerAddress string, signedPayload payload.Payload) error {
-	decodedSignature, err := hex.DecodeString(signedPayload.Signature.HexSignature)
-	if err != nil {
-		fmt.Println("error signing ", err)
-		return err
+	if m.BearerToken == nil {
+		return errors.New(utils.ErrorNoToken)
 	}
-	fmt.Println("decodedSignature", decodedSignature)
-
+	if signedPayload.Signature == nil {
+		return errors.New(utils.ErrorNoSignature)
+	}
 	bytesPublicKey, err := hex.DecodeString(signedPayload.Signature.HexPublicKey)
 	if err != nil {
 		return err
 	}
-	fmt.Println("wallet ", m.Wallet, signedPayload.Signature.HexPublicKey)
-
 	var pubKey neofsecdsa.PublicKey
 	if err := pubKey.Decode(bytesPublicKey); err != nil {
 		return err
 	}
 
-	staticSigner := neofscrypto.NewStaticSigner(neofscrypto.ECDSA_DETERMINISTIC_SHA256, decodedSignature, &pubKey)
-	issuer := user.ResolveFromECDSAPublicKey(ecdsa.PublicKey(pubKey))
-
-	if err := m.BearerToken.Sign(user.NewSigner(staticSigner, issuer)); err != nil {
-		fmt.Println("tried reading ", err)
+	signer := neofsecdsa.Signer(m.Wallet.PrivateKey().PrivateKey)
+	usr := user.ResolveFromECDSAPublicKey(ecdsa.PublicKey(pubKey))
+	if err := m.BearerToken.Sign(user.NewSigner(signer, usr)); err != nil {
 		return err
 	}
-
 	if !m.BearerToken.VerifySignature() {
 		fmt.Println("not signed")
-		return errors.New("token not signed")
+		return errors.New(utils.ErrorNoSignature)
 	}
 	return nil
 }

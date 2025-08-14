@@ -587,7 +587,7 @@ func InitWriter(ctx context.Context, p *ObjectParameter, token tokens.Token) (io
 	if err != nil {
 		return nil, err
 	}
-	userID := user.ResolveFromECDSAPublicKey(p.PublicKey)
+	userID := user.ResolveFromECDSAPublicKey(ecdsa.PublicKey(*gA.PublicKey())) // this may effect who is registered as the owner of the payload on neo FS - unless we are explicitly set the owner
 	var gateSigner user.Signer = user.NewAutoIDSignerRFC6979(gA.PrivateKey().PrivateKey)
 	ni, err := sdkCli.NetworkInfo(ctx, client.PrmNetworkInfo{})
 	if err != nil {
