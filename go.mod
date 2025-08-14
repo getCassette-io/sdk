@@ -1,4 +1,4 @@
-module github.com/configwizard/sdk
+module github.com/cassette/sdk
 
 go 1.23.0
 
