@@ -2,9 +2,9 @@ package main
 
 import (
 	"fmt"
-	"github.com/cassette/sdk/controller"
-	"github.com/cassette/sdk/tui/views"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/getCassette-io/sdk/controller"
+	"github.com/getCassette-io/sdk/tui/views"
 	"strings"
 )
 

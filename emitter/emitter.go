@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/cassette/sdk/payload"
-	"github.com/cassette/sdk/utils"
+	"github.com/getCassette-io/sdk/payload"
+	"github.com/getCassette-io/sdk/utils"
 )
 
 type EventMessage string

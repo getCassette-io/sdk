@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/cassette/sdk/notification"
+	"github.com/getCassette-io/sdk/notification"
 	"log"
 	"sync"
 	"time"

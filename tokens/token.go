@@ -10,8 +10,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/cassette/sdk/payload"
-	"github.com/cassette/sdk/utils"
+	"github.com/getCassette-io/sdk/payload"
+	"github.com/getCassette-io/sdk/utils"
 	"github.com/google/uuid"
 	"github.com/nspcc-dev/neo-go/pkg/crypto/keys"
 	"github.com/nspcc-dev/neo-go/pkg/wallet"

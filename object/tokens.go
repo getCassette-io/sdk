@@ -3,8 +3,8 @@ package object
 import (
 	"context"
 	"crypto/ecdsa"
-	"github.com/cassette/sdk/config"
-	"github.com/cassette/sdk/payload"
+	"github.com/getCassette-io/sdk/config"
+	"github.com/getCassette-io/sdk/payload"
 	"github.com/nspcc-dev/neo-go/pkg/crypto/keys"
 	"github.com/nspcc-dev/neofs-sdk-go/bearer"
 	"github.com/nspcc-dev/neofs-sdk-go/client"

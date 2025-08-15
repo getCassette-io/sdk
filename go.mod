@@ -1,4 +1,4 @@
-module github.com/cassette/sdk
+module github.com/getCassette-io/sdk
 
 go 1.24.0
 

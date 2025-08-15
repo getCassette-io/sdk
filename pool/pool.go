@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"fmt"
-	"github.com/cassette/sdk/config"
+	"github.com/getCassette-io/sdk/config"
 	"github.com/nspcc-dev/neofs-sdk-go/client"
 	"github.com/nspcc-dev/neofs-sdk-go/pool"
 	"github.com/nspcc-dev/neofs-sdk-go/user"

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/cassette/sdk/readwriter"
+	"github.com/getCassette-io/sdk/readwriter"
 	"io"
 	"sync"
 	"testing"

@@ -6,7 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/cassette/sdk/utils"
+	"github.com/getCassette-io/sdk/utils"
 	"github.com/nspcc-dev/neo-go/cli/flags"
 	"github.com/nspcc-dev/neo-go/pkg/core/block"
 	"github.com/nspcc-dev/neo-go/pkg/core/native/nativehashes"

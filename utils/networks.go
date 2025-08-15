@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/cassette/sdk/config"
+	"github.com/getCassette-io/sdk/config"
 	"golang.org/x/exp/maps"
 )
 

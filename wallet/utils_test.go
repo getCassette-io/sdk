@@ -2,7 +2,7 @@ package wallet_test
 
 import (
 	"encoding/json"
-	gswallet "github.com/cassette/sdk/wallet"
+	gswallet "github.com/getCassette-io/sdk/wallet"
 	"github.com/nspcc-dev/neo-go/pkg/wallet"
 	"github.com/nspcc-dev/neofs-sdk-go/user"
 	"github.com/stretchr/testify/assert"

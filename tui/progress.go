@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/cassette/sdk/notification"
+	"github.com/getCassette-io/sdk/notification"
 	"time"
 )
 

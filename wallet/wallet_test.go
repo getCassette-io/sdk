@@ -3,7 +3,7 @@ package wallet_test
 import (
 	"encoding/hex"
 	"fmt"
-	"github.com/cassette/sdk/wallet"
+	"github.com/getCassette-io/sdk/wallet"
 	"github.com/stretchr/testify/assert"
 	"os"
 	"testing"
