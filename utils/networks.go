@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/configwizard/sdk/config"
+	"github.com/cassette/sdk/config"
 	"golang.org/x/exp/maps"
 )
 

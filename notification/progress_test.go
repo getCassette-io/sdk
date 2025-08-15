@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/configwizard/sdk/readwriter"
+	"github.com/cassette/sdk/readwriter"
 	"io"
 	"sync"
 	"testing"

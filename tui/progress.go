@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/configwizard/sdk/notification"
+	"github.com/cassette/sdk/notification"
 	"time"
 )
 

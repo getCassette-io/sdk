@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/configwizard/sdk/payload"
-	"github.com/configwizard/sdk/utils"
+	"github.com/cassette/sdk/payload"
+	"github.com/cassette/sdk/utils"
 )
 
 type EventMessage string

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/configwizard/sdk/notification"
+	"github.com/cassette/sdk/notification"
 	"log"
 	"sync"
 	"time"
