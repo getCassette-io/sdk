@@ -556,11 +556,16 @@ func main() {
 
 	wg := waitgroup.NewWaitGroup(logger)
 	ctx := context.Background()
-	var network utils.Network
-	var notifier notification.Notifier
-	var store database.Store
 
-	c, err := controller.NewMockController(wg.WaitGroup(), ctx, pEmitter, network, notifier, store, logger)
+	db := database.NewUnregisteredMockDB()
+
+	notifyEmitter := notification.MockNotificationEvent{Name: "notification events:", DB: db}
+	idGenerator := func() string {
+		return "mock-notifier-94d9a4c7-9999-4055-a549-f51383edfe57"
+	}
+	n := notification.NewNotificationManager(wg.WaitGroup(), notifyEmitter, ctx, idGenerator)
+
+	c, err := controller.NewMockController(wg.WaitGroup(), ctx, pEmitter, utils.MainNet, n, db, logger)
 	if err != nil {
 		log.Fatal(err)
 	}
