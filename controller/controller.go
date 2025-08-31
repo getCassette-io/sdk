@@ -571,6 +571,15 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 	o := container.ContainerCaller{}
 	localContainer, err := o.SynchronousContainerHead(ctx, cnrId, containerParameters.Pl)
 	//acl := localContainer.BasicACL
+
+	isACLUpdating := false
+	for _, record := range containerParameters.EACL.Records {
+		if record.Action == eacl.ActionAllow && record.Operation == eacl.OperationHead {
+			isACLUpdating = true
+			break
+		}
+	}
+
 	for _, e := range localContainer.ExtendedACL.Records {
 		if e.Operation == eacl.OperationHead || e.Operation == eacl.OperationSearch {
 			if e.Action == eacl.ActionAllow {
@@ -581,6 +590,8 @@ func (c *Controller) PerformContainerAction(wg *waitgroup.WG, ctx context.Contex
 				} else {
 					return nil
 				}
+			} else if !isACLUpdating {
+				return nil
 			}
 		}
 	}
