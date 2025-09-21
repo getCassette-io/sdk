@@ -6,6 +6,13 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
+	"math/big"
+	"math/rand"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/getCassette-io/sdk/utils"
 	"github.com/nspcc-dev/neo-go/cli/flags"
 	"github.com/nspcc-dev/neo-go/pkg/core/block"
@@ -28,16 +35,60 @@ import (
 	"github.com/nspcc-dev/neo-go/pkg/vm/opcode"
 	"github.com/nspcc-dev/neo-go/pkg/vm/vmstate"
 	"github.com/nspcc-dev/neo-go/pkg/wallet"
-	"log"
-	"math/big"
-	"strings"
-	"time"
 )
 
 const testNetExplorerUrl = "https://dora.coz.io/transaction/neo3/testnet"
 const mainnetExplorerUrl = "https://dora.coz.io/transaction/neo3/mainnet"
 
 type RPC_NETWORK string
+
+// Connection pool for HTTP clients
+var (
+	clientPool = make(map[string]*client.Client)
+	poolMutex  sync.RWMutex
+)
+
+// getOrCreateClient returns a cached client or creates a new one
+func getOrCreateClient(ctx context.Context, rpcEndpoint string) (*client.Client, error) {
+	poolMutex.Lock()
+	defer poolMutex.Unlock()
+
+	// Check if we have a cached client
+	if cachedClient, exists := clientPool[rpcEndpoint]; exists {
+		// Test if the client is still working
+		_, err := cachedClient.GetVersion()
+		if err == nil {
+			return cachedClient, nil
+		}
+		// Client is broken, remove it from cache
+		delete(clientPool, rpcEndpoint)
+	}
+
+	// Create new client with proper configuration
+	newClient, err := client.New(ctx, rpcEndpoint, client.Options{
+		RequestTimeout: 30 * time.Second,
+		DialTimeout:    10 * time.Second,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache the new client
+	clientPool[rpcEndpoint] = newClient
+	return newClient, nil
+}
+
+// clearClientPool clears all cached clients
+func clearClientPool() {
+	poolMutex.Lock()
+	defer poolMutex.Unlock()
+	clientPool = make(map[string]*client.Client)
+}
+
+// ClearClientPool is a public function to clear the connection pool
+func ClearClientPool() {
+	clearClientPool()
+}
 
 // const (
 // todo - this should move to config object
@@ -320,36 +371,90 @@ func SubmitWCTransaction(dw *wallet.Account, websocket string, transactionData, 
 }
 
 func GetNep17Balances(ctx context.Context, acc string, rpcEndpoint string) ([]Nep17Token, error) {
-	//ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	//defer cancel()
-	cli, err := client.New(ctx, rpcEndpoint, client.Options{})
-	if err != nil {
-		return nil, err
-	}
 	addressUint160, err := StringToUint160(acc)
 	if err != nil {
 		return nil, err
 	}
-	balances, err := cli.GetNEP17Balances(addressUint160)
-	if err != nil {
-		return nil, err
-	}
-	var tokens []Nep17Token
-	for _, balance := range balances.Balances {
-		amount, ok := new(big.Int).SetString(balance.Amount, 10)
-		if !ok {
-			// Handle conversion error
-			continue
+
+	// Retry configuration
+	maxRetries := 5
+	baseDelay := 2 * time.Second
+	maxDelay := 30 * time.Second
+
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		// Create context with timeout for this attempt
+		attemptCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+
+		// Use connection pool to get or create client
+		cli, err := getOrCreateClient(attemptCtx, rpcEndpoint)
+		if err != nil {
+			cancel()
+			lastErr = err
+			if attempt < maxRetries-1 {
+				delay := calculateBackoffDelay(attempt, baseDelay, maxDelay)
+				fmt.Printf("Client creation failed (attempt %d/%d), retrying in %v: %v\n",
+					attempt+1, maxRetries, delay, err)
+				time.Sleep(delay)
+				continue
+			}
+			return nil, err
 		}
-		tokens = append(tokens, Nep17Token{
-			Asset:        balance.Asset,
-			Amount:       amount.Uint64(),
-			PrettyAmount: fixedn.ToString(amount, balance.Decimals),
-			Precision:    balance.Decimals,
-			Symbol:       balance.Symbol,
-		})
+
+		// Attempt to get balances
+		balances, err := cli.GetNEP17Balances(addressUint160)
+		cancel() // Always cancel the attempt context
+
+		if err != nil {
+			lastErr = err
+			if attempt < maxRetries-1 {
+				delay := calculateBackoffDelay(attempt, baseDelay, maxDelay)
+				fmt.Printf("GetNEP17Balances failed (attempt %d/%d), retrying in %v: %v\n",
+					attempt+1, maxRetries, delay, err)
+				time.Sleep(delay)
+				continue
+			}
+			return nil, err
+		}
+
+		// Success - process and return balances
+		var tokens []Nep17Token
+		for _, balance := range balances.Balances {
+			amount, ok := new(big.Int).SetString(balance.Amount, 10)
+			if !ok {
+				// Handle conversion error
+				continue
+			}
+			tokens = append(tokens, Nep17Token{
+				Asset:        balance.Asset,
+				Amount:       amount.Uint64(),
+				PrettyAmount: fixedn.ToString(amount, balance.Decimals),
+				Precision:    balance.Decimals,
+				Symbol:       balance.Symbol,
+			})
+		}
+		return tokens, nil
 	}
-	return tokens, nil
+
+	// If we get here, all retries failed
+	return nil, fmt.Errorf("GetNEP17Balances failed after %d attempts, last error: %v", maxRetries, lastErr)
+}
+
+// calculateBackoffDelay implements exponential backoff with jitter
+func calculateBackoffDelay(attempt int, baseDelay, maxDelay time.Duration) time.Duration {
+	// Exponential backoff: baseDelay * 2^attempt
+	delay := baseDelay * time.Duration(1<<uint(attempt))
+
+	// Cap at maxDelay
+	if delay > maxDelay {
+		delay = maxDelay
+	}
+
+	// Add jitter (±25% random variation)
+	jitter := time.Duration(float64(delay) * 0.25 * (2*rand.Float64() - 1))
+	delay += jitter
+
+	return delay
 }
 
 func TransferTokenWithPrivateKey(acc *wallet.Account, websocket string, recipient string, amount float64) (util.Uint256, uint32, error) {
