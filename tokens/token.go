@@ -68,10 +68,6 @@ func (m PrivateContainerSessionToken) Sign(issuerAddress string, signedPayload p
 	if err := pubKey.Decode(bPubKey); err != nil {
 		return err
 	}
-	ecdsaKey := (ecdsa.PublicKey)(pubKey)
-
-	issuer := user.ResolveFromECDSAPublicKey(ecdsaKey)
-
 	bSig, err := hex.DecodeString(signedPayload.Signature.HexSignature)
 	if err != nil {
 		fmt.Println("error decoding hex signature", err)
@@ -82,11 +78,10 @@ func (m PrivateContainerSessionToken) Sign(issuerAddress string, signedPayload p
 		fmt.Println("error decoding hex salt", err)
 		return err
 	}
-	staticSigner := neofscrypto.NewStaticSigner(neofscrypto.ECDSA_DETERMINISTIC_SHA256, append(bSig, salt...), &pubKey)
-	err = m.SessionToken.Sign(user.NewSigner(staticSigner, issuer))
-	if err != nil {
-		return err
-	}
+
+	// Use NewSignature and AttachSignature instead of NewStaticSigner for neofs-sdk-go rc15
+	signature := neofscrypto.NewSignature(neofscrypto.ECDSA_DETERMINISTIC_SHA256, &pubKey, append(bSig, salt...))
+	m.SessionToken.AttachSignature(signature)
 	if !m.SessionToken.VerifySignature() {
 		return errors.New(utils.ErrorNoSignature)
 	}
@@ -136,7 +131,7 @@ func (m PrivateBearerToken) Sign(issuerAddress string, signedPayload payload.Pay
 	}
 
 	signer := neofsecdsa.Signer(m.Wallet.PrivateKey().PrivateKey)
-	usr := user.ResolveFromECDSAPublicKey(ecdsa.PublicKey(pubKey))
+	usr := user.NewFromECDSAPublicKey(ecdsa.PublicKey(pubKey))
 	if err := m.BearerToken.Sign(user.NewSigner(signer, usr)); err != nil {
 		return err
 	}
@@ -205,7 +200,7 @@ func (t PrivateKeyTokenManager) NewSessionToken(lIat, lNbf, lExp uint64, cnrID c
 	sessionToken.SetExp(lExp)
 
 	var issuer user.ID
-	issuer = user.ResolveFromECDSAPublicKey(ecdsa.PublicKey(issuerKey))
+	issuer = user.NewFromECDSAPublicKey(ecdsa.PublicKey(issuerKey))
 	sessionToken.SetIssuer(issuer)
 	return &PrivateContainerSessionToken{
 		SessionToken: sessionToken,
@@ -217,7 +212,7 @@ func (t PrivateKeyTokenManager) PopulatePrivateBearerToken(bt bearer.Token) Priv
 	return PrivateBearerToken{BearerToken: &bt, Wallet: t.W}
 }
 func (t PrivateKeyTokenManager) NewBearerToken(table eacl.Table, lIat, lNbf, lExp uint64, temporaryKey *keys.PublicKey) (Token, error) {
-	temporaryUser := user.ResolveFromECDSAPublicKey(*(*ecdsa.PublicKey)(temporaryKey))
+	temporaryUser := user.NewFromECDSAPublicKey(*(*ecdsa.PublicKey)(temporaryKey))
 	var bearerToken bearer.Token
 	bearerToken.SetEACLTable(table)
 	bearerToken.ForUser(temporaryUser) //temporarily give this key rights to the actions in the table.
@@ -269,7 +264,7 @@ func (m ContainerSessionToken) GetSignature() payload.Signature {
 	return m.Signature
 }
 func (s ContainerSessionToken) InvalidAt(epoch uint64) bool {
-	return s.SessionToken.InvalidAt(epoch)
+	return !s.SessionToken.ValidAt(epoch)
 }
 
 func (s ContainerSessionToken) SignedData() []byte {
@@ -280,9 +275,12 @@ func (s ContainerSessionToken) Sign(issuerAddress string, p payload.Payload) err
 	if s.SessionToken == nil {
 		return errors.New(utils.ErrorNoToken)
 	}
-	//var issuer user.ID
+	var issuer user.ID
 	fmt.Printf("payload signature %+v\r\n", p.Signature)
-	//err := issuer.DecodeString(issuerAddress)
+	err := issuer.DecodeString(issuerAddress)
+	if err != nil {
+		return err
+	}
 	bPubKey, err := hex.DecodeString(p.Signature.HexPublicKey)
 	if err != nil {
 		return err
@@ -291,7 +289,6 @@ func (s ContainerSessionToken) Sign(issuerAddress string, p payload.Payload) err
 	if err := pubKey.Decode(bPubKey); err != nil {
 		return err
 	}
-	issuer := user.ResolveFromECDSAPublicKey(ecdsa.PublicKey(pubKey))
 	if p.Signature == nil {
 		return errors.New(utils.ErrorNoSignature)
 	}
@@ -306,11 +303,9 @@ func (s ContainerSessionToken) Sign(issuerAddress string, p payload.Payload) err
 		return err
 	}
 
-	staticSigner := neofscrypto.NewStaticSigner(neofscrypto.ECDSA_WALLETCONNECT, append(bSig, salt...), &pubKey)
-	err = s.SessionToken.Sign(user.NewSigner(staticSigner, issuer))
-	if err != nil {
-		return err
-	}
+	// Use NewSignature and AttachSignature instead of NewStaticSigner for neofs-sdk-go rc15
+	signature := neofscrypto.NewSignature(neofscrypto.ECDSA_WALLETCONNECT, &pubKey, append(bSig, salt...))
+	s.SessionToken.AttachSignature(signature)
 	fmt.Println("container session token has been signed")
 	if !s.SessionToken.VerifySignature() {
 		fmt.Println("verifying signature failed for container session token")
@@ -362,12 +357,10 @@ func (b BearerToken) Sign(issuerAddress string, p payload.Payload) error {
 	if err != nil {
 		return err
 	}
-	staticSigner := neofscrypto.NewStaticSigner(neofscrypto.ECDSA_WALLETCONNECT, append(bSig, salt...), &pubKey)
-	err = b.BearerToken.Sign(user.NewSigner(staticSigner, issuer))
-	if err != nil {
-		fmt.Println("signing token failed ", err)
-		return err
-	}
+
+	// Use NewSignature and AttachSignature instead of NewStaticSigner for neofs-sdk-go rc15
+	signature := neofscrypto.NewSignature(neofscrypto.ECDSA_WALLETCONNECT, &pubKey, append(bSig, salt...))
+	b.BearerToken.AttachSignature(signature)
 	if !b.VerifySignature() {
 		return errors.New(utils.ErrorNoSignature)
 	}
@@ -378,7 +371,7 @@ func (b BearerToken) VerifySignature() bool {
 	return b.BearerToken.VerifySignature()
 }
 func (b BearerToken) InvalidAt(epoch uint64) bool {
-	return b.BearerToken.InvalidAt(epoch)
+	return !b.BearerToken.ValidAt(epoch)
 }
 
 func (b BearerToken) SignedData() []byte {
@@ -499,7 +492,7 @@ func (t WalletConnectTokenManager) NewBearerToken(table eacl.Table, lIat, lNbf, 
 			return nil, err
 		}
 	} else {
-		temporaryUser := user.ResolveFromECDSAPublicKey(*(*ecdsa.PublicKey)(temporaryKey))
+		temporaryUser := user.NewFromECDSAPublicKey(*(*ecdsa.PublicKey)(temporaryKey))
 		bearerToken.SetEACLTable(table)
 		bearerToken.ForUser(temporaryUser) //temporarily give this key rights to the actions in the table.
 		bearerToken.SetExp(lExp)
@@ -553,7 +546,7 @@ func (t WalletConnectTokenManager) NewSessionToken(lIat, lNbf, lExp uint64, cnrI
 
 	var issuer user.ID
 	fmt.Println("WC sessioin token from key ", t.W.PublicKey().String())
-	issuer = user.ResolveFromECDSAPublicKey(ecdsa.PublicKey((issuerKey))) //todo - where does this key come from?
+	issuer = user.NewFromECDSAPublicKey(ecdsa.PublicKey((issuerKey))) //todo - where does this key come from?
 	sessionToken.SetIssuer(issuer)
 	return &ContainerSessionToken{
 		SessionToken: sessionToken,
@@ -565,54 +558,54 @@ func (t WalletConnectTokenManager) NewSessionToken(lIat, lNbf, lExp uint64, cnrI
 //	t.BearerTokens[fmt.Sprintf("%s.%d", address, operation)] = BearerToken{BearerToken: bt}
 //}
 
-func GeneratePermissionsTable(cid cid.ID, toWhom eacl.Target) eacl.Table {
-	table := eacl.Table{}
+// func GeneratePermissionsTable(cid cid.ID, toWhom eacl.Target) eacl.Table {
+// 	table := eacl.Table{}
 
-	headAllowRecord := eacl.NewRecord()
-	headAllowRecord.SetOperation(eacl.OperationHead)
-	headAllowRecord.SetAction(eacl.ActionAllow)
-	headAllowRecord.SetTargets(toWhom)
+// 	headAllowRecord := eacl.NewRecord()
+// 	headAllowRecord.SetOperation(eacl.OperationHead)
+// 	headAllowRecord.SetAction(eacl.ActionAllow)
+// 	headAllowRecord.SetTargets(toWhom)
 
-	rangeAllowRecord := eacl.NewRecord()
-	rangeAllowRecord.SetOperation(eacl.OperationRange)
-	rangeAllowRecord.SetAction(eacl.ActionAllow)
-	rangeAllowRecord.SetTargets(toWhom)
+// 	rangeAllowRecord := eacl.NewRecord()
+// 	rangeAllowRecord.SetOperation(eacl.OperationRange)
+// 	rangeAllowRecord.SetAction(eacl.ActionAllow)
+// 	rangeAllowRecord.SetTargets(toWhom)
 
-	searchAllowRecord := eacl.NewRecord()
-	searchAllowRecord.SetOperation(eacl.OperationSearch)
-	searchAllowRecord.SetAction(eacl.ActionAllow)
-	searchAllowRecord.SetTargets(toWhom)
+// 	searchAllowRecord := eacl.NewRecord()
+// 	searchAllowRecord.SetOperation(eacl.OperationSearch)
+// 	searchAllowRecord.SetAction(eacl.ActionAllow)
+// 	searchAllowRecord.SetTargets(toWhom)
 
-	getAllowRecord := eacl.NewRecord()
-	getAllowRecord.SetOperation(eacl.OperationGet)
-	getAllowRecord.SetAction(eacl.ActionAllow)
-	getAllowRecord.SetTargets(toWhom)
+// 	getAllowRecord := eacl.NewRecord()
+// 	getAllowRecord.SetOperation(eacl.OperationGet)
+// 	getAllowRecord.SetAction(eacl.ActionAllow)
+// 	getAllowRecord.SetTargets(toWhom)
 
-	putAllowRecord := eacl.NewRecord()
-	putAllowRecord.SetOperation(eacl.OperationPut)
-	putAllowRecord.SetAction(eacl.ActionAllow)
-	putAllowRecord.SetTargets(toWhom)
+// 	putAllowRecord := eacl.NewRecord()
+// 	putAllowRecord.SetOperation(eacl.OperationPut)
+// 	putAllowRecord.SetAction(eacl.ActionAllow)
+// 	putAllowRecord.SetTargets(toWhom)
 
-	deleteAllowRecord := eacl.NewRecord()
-	deleteAllowRecord.SetOperation(eacl.OperationDelete)
-	deleteAllowRecord.SetAction(eacl.ActionAllow)
-	deleteAllowRecord.SetTargets(toWhom)
+// 	deleteAllowRecord := eacl.NewRecord()
+// 	deleteAllowRecord.SetOperation(eacl.OperationDelete)
+// 	deleteAllowRecord.SetAction(eacl.ActionAllow)
+// 	deleteAllowRecord.SetTargets(toWhom)
 
-	table.SetCID(cid)
-	table.AddRecord(getAllowRecord)
-	table.AddRecord(headAllowRecord)
-	table.AddRecord(putAllowRecord)
-	table.AddRecord(deleteAllowRecord)
-	//now handle all the records for other users
-	for op := eacl.OperationGet; op <= eacl.OperationRangeHash; op++ {
-		record := eacl.NewRecord()
-		record.SetOperation(op)
-		record.SetAction(eacl.ActionDeny)
-		eacl.AddFormedTarget(record, eacl.RoleOthers)
-		table.AddRecord(record)
-	}
-	return table
-}
+// 	table.SetCID(cid)
+// 	table.AddRecord(getAllowRecord)
+// 	table.AddRecord(headAllowRecord)
+// 	table.AddRecord(putAllowRecord)
+// 	table.AddRecord(deleteAllowRecord)
+// 	//now handle all the records for other users
+// 	for op := eacl.OperationGet; op <= eacl.OperationRangeHash; op++ {
+// 		record := eacl.NewRecord()
+// 		record.SetOperation(op)
+// 		record.SetAction(eacl.ActionDeny)
+// 		eacl.AddFormedTarget(record, eacl.RoleOthers)
+// 		table.AddRecord(record)
+// 	}
+// 	return table
+// }
 
 func stringToBytes(byt string) []byte {
 	var bData []byte

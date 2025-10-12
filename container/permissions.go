@@ -1,7 +1,6 @@
 package container
 
 import (
-	"crypto/ecdsa"
 	"github.com/google/uuid"
 	"github.com/nspcc-dev/neofs-sdk-go/eacl"
 	"github.com/nspcc-dev/neofs-sdk-go/session"
@@ -20,28 +19,38 @@ func unsignedContainerSessionForOp(ownerSigner, gateSigner user.Signer, curEpoch
 
 	return cnrSession
 }
-func allowOpToOthers(eACL *eacl.Table, op eacl.Operation) {
-	var rec eacl.Record
-	rec.SetOperation(op)
-	rec.SetAction(eacl.ActionAllow)
-	eacl.AddFormedTarget(&rec, eacl.RoleOthers)
-
-	eACL.AddRecord(&rec)
+func allowOpToOthers(op eacl.Operation) eacl.Record {
+	target := eacl.NewTargetByRole(eacl.RoleOthers)
+	record := eacl.ConstructRecord(eacl.ActionAllow, op, []eacl.Target{target})
+	return record
 }
-func denyOpToOthers(eACL *eacl.Table, op eacl.Operation) {
-	var rec eacl.Record
-	rec.SetOperation(op)
-	rec.SetAction(eacl.ActionDeny)
-	eacl.AddFormedTarget(&rec, eacl.RoleOthers)
+func denyOpToOthers(op eacl.Operation) eacl.Record {
+	target := eacl.NewTargetByRole(eacl.RoleOthers)
+	record := eacl.ConstructRecord(eacl.ActionDeny, op, []eacl.Target{target})
+	return record
 
-	eACL.AddRecord(&rec)
+	//var rec eacl.Record
+	//rec.SetOperation(op)
+	//rec.SetAction(eacl.ActionDeny)
+	//eacl.AddFormedTarget(&rec, eacl.RoleOthers)
+
+	//records = append(records, record)
+
+	//eACL.AddRecord(&rec)
 }
 
-func allowOpByPublicKey(eACL *eacl.Table, op eacl.Operation, pubKey ecdsa.PublicKey) {
-	var rec eacl.Record
-	rec.SetOperation(op)
-	rec.SetAction(eacl.ActionAllow)
-	eacl.AddFormedTarget(&rec, eacl.RoleUnknown, pubKey)
+// func allowOpByPublicKey(eACL *eacl.Table, op eacl.Operation, userID user.ID) eacl.Record {
+// 	//target := eacl.NewTargetByRole(eacl.RoleUnspecified)
+// 	//record := eacl.ConstructRecord(eacl.ActionAllow, op, []eacl.Target{target})
+// 	//return record
 
-	eACL.AddRecord(&rec)
-}
+// 	var rec eacl.Record
+// 	rec.SetOperation(op)
+// 	rec.SetAction(eacl.ActionAllow)
+// 	target := eacl.NewTargetByAccounts([]user.ID{userID})
+// 	record := eacl.ConstructRecord(eacl.ActionDeny, op, []eacl.Target{target})
+// 	return record
+// 	//eacl.AddFormedTarget(&rec, eacl.RoleUnspecified, userID)
+
+// 	//eACL.AddRecord(&rec)
+// }

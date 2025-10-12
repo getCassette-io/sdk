@@ -3,6 +3,8 @@ package object
 import (
 	"context"
 	"crypto/ecdsa"
+	"time"
+
 	"github.com/getCassette-io/sdk/config"
 	"github.com/getCassette-io/sdk/payload"
 	"github.com/nspcc-dev/neo-go/pkg/crypto/keys"
@@ -11,7 +13,6 @@ import (
 	cid "github.com/nspcc-dev/neofs-sdk-go/container/id"
 	"github.com/nspcc-dev/neofs-sdk-go/eacl"
 	"github.com/nspcc-dev/neofs-sdk-go/user"
-	"time"
 )
 
 // fixme - move this file out of object.
@@ -47,36 +48,35 @@ func ObjectBearerToken(cnrID cid.ID, p payload.Parameters, issuerKey keys.Public
 	bearerToken.SetExp(netInfo.CurrentEpoch() + p.Epoch()) // or particular exp value
 	tab := eacl.Table{}
 	tab.SetCID(cnrID)
-	var records []*eacl.Record
+	var records []eacl.Record
 	//allow
 	for op := eacl.OperationGet; op <= eacl.OperationRangeHash; op++ {
-		record := eacl.NewRecord()
-		record.SetOperation(op)
-		record.SetAction(eacl.ActionAllow)
-		equal := eacl.MatchStringEqual
-		equal.DecodeString(cnrID.String())
-		record.AddObjectContainerIDFilter(equal, cnrID)
-		eacl.AddFormedTarget(record, eacl.RoleUnknown, gA.PrivateKey().PrivateKey.PublicKey)
+		// Create target for the specific user
+		target := eacl.NewTargetByAccounts([]user.ID{gateSigner.UserID()})
+
+		// Create container filter
+		containerFilter := eacl.NewFilterObjectsFromContainer(cnrID)
+
+		// Construct record with proper parameters
+		record := eacl.ConstructRecord(eacl.ActionAllow, op, []eacl.Target{target}, containerFilter)
 		records = append(records, record)
 	}
 	//deny
 	for op := eacl.OperationGet; op <= eacl.OperationRangeHash; op++ {
-		record := eacl.NewRecord()
-		record.SetOperation(op)
-		record.SetAction(eacl.ActionDeny)
-		equal := eacl.MatchStringEqual
-		equal.DecodeString(cnrID.String())
-		record.AddObjectContainerIDFilter(equal, cnrID)
+		// Create target for others (all users except the specific user)
+		target := eacl.NewTargetByRole(eacl.RoleOthers)
 
-		eacl.AddFormedTarget(record, eacl.RoleOthers)
+		// Create container filter
+		containerFilter := eacl.NewFilterObjectsFromContainer(cnrID)
+
+		// Construct record with proper parameters
+		record := eacl.ConstructRecord(eacl.ActionDeny, op, []eacl.Target{target}, containerFilter)
 		records = append(records, record)
 	}
-	for _, r := range records {
-		tab.AddRecord(r)
-	}
+	tab.SetRecords(records)
 	bearerToken.SetEACLTable(tab)
 	var issuer user.ID
-	issuer = user.ResolveFromECDSAPublicKey(ecdsa.PublicKey(issuerKey))
+	issuer = user.NewFromECDSAPublicKey(ecdsa.PublicKey(issuerKey))
 	bearerToken.ForUser(issuer)
 	return bearerToken, nil
 }

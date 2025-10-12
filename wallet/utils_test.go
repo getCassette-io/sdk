@@ -56,7 +56,7 @@ func TestOwnerID(t *testing.T) {
 
 	fromWallet, err := gswallet.GetCredentialsFromWallet("", "password", &w)
 	assert.Nil(t, err, "error not nil")
-	userID := user.ResolveFromECDSAPublicKey(fromWallet.PublicKey)
+	userID := user.NewFromECDSAPublicKey(fromWallet.PublicKey)
 	assert.Nil(t, err, "error not nil")
 	assert.Equal(t, "NXcncJT8jipH7ZkaUQzkb6Dx28w7D1Njd3", userID.String(), "ID not equal")
 }

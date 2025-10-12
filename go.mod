@@ -14,13 +14,13 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jdxyw/generativeart v0.0.0-20220127024657-50049f153090
 	github.com/machinebox/progress v0.2.0
-	github.com/nspcc-dev/neo-go v0.111.0
-	github.com/nspcc-dev/neofs-sdk-go v1.0.0-rc.14
+	github.com/nspcc-dev/neo-go v0.113.0
+	github.com/nspcc-dev/neofs-sdk-go v1.0.0-rc.15
 	github.com/spf13/viper v1.20.1
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.1
 	gitlab.com/NebulousLabs/go-upnp v0.0.0-20211002182029-11da932010b6
 	go.uber.org/zap v1.27.0
-	golang.org/x/exp v0.0.0-20250813145105-42675adae3e6
+	golang.org/x/exp v0.0.0-20250911091902-df9299821621
 )
 
 require (
@@ -47,7 +47,6 @@ require (
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/holiman/uint256 v1.3.2 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
-	github.com/magiconair/properties v1.8.10 // indirect
 	github.com/matryer/is v1.4.1 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
@@ -57,16 +56,17 @@ require (
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/nspcc-dev/go-ordered-json v0.0.0-20250226190835-fb3f82b1f468 // indirect
-	github.com/nspcc-dev/hrw/v2 v2.0.3 // indirect
-	github.com/nspcc-dev/rfc6979 v0.2.3 // indirect
-	github.com/nspcc-dev/tzhash v1.8.2 // indirect
+	github.com/nspcc-dev/bbolt v0.0.0-20250911202005-807225ebb0c8 // indirect
+	github.com/nspcc-dev/go-ordered-json v0.0.0-20250911084817-6fb4472993d1 // indirect
+	github.com/nspcc-dev/hrw/v2 v2.0.4 // indirect
+	github.com/nspcc-dev/rfc6979 v0.2.4 // indirect
+	github.com/nspcc-dev/tzhash v1.8.3 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
 	github.com/pierrec/lz4 v2.6.1+incompatible // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/prometheus/client_golang v1.23.0 // indirect
+	github.com/prometheus/client_golang v1.23.2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
-	github.com/prometheus/common v0.65.0 // indirect
+	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.17.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
@@ -83,16 +83,16 @@ require (
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/xrash/smetrics v0.0.0-20250705151800-55b8f293f342 // indirect
 	gitlab.com/NebulousLabs/fastrand v0.0.0-20181126182046-603482d69e40 // indirect
-	go.etcd.io/bbolt v1.4.2 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/crypto v0.41.0 // indirect
+	go.yaml.in/yaml/v2 v2.4.2 // indirect
+	golang.org/x/crypto v0.42.0 // indirect
 	golang.org/x/image v0.30.0 // indirect
-	golang.org/x/net v0.43.0 // indirect
-	golang.org/x/sync v0.16.0 // indirect
-	golang.org/x/sys v0.35.0 // indirect
-	golang.org/x/text v0.28.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20250811230008-5f3141c8851a // indirect
-	google.golang.org/grpc v1.74.2 // indirect
-	google.golang.org/protobuf v1.36.7 // indirect
+	golang.org/x/net v0.44.0 // indirect
+	golang.org/x/sync v0.17.0 // indirect
+	golang.org/x/sys v0.36.0 // indirect
+	golang.org/x/text v0.29.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20250922171735-9219d122eba9 // indirect
+	google.golang.org/grpc v1.75.1 // indirect
+	google.golang.org/protobuf v1.36.9 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
