@@ -140,45 +140,61 @@ type Target struct {
 
 func CustomAccessTable(denyPermissions, allowPermissions []string) (eacl.Table, error) {
 	// set EACL denying WRITE access to OTHERS
-	eACL := eacl.NewTable()
+	tab := eacl.Table{}
+	var records []eacl.Record
 	//this will deny before allow which means that it will block if its in this table and the allow list.
 	for _, v := range denyPermissions {
 		switch v {
 		case "put":
-			denyOpToOthers(eACL, eacl.OperationPut)
+			record := denyOpToOthers(eacl.OperationPut)
+			records = append(records, record)
 		case "delete":
-			denyOpToOthers(eACL, eacl.OperationDelete)
+			record := denyOpToOthers(eacl.OperationDelete)
+			records = append(records, record)
 		case "head":
-			denyOpToOthers(eACL, eacl.OperationHead)
+			record := denyOpToOthers(eacl.OperationHead)
+			records = append(records, record)
 		case "get":
-			denyOpToOthers(eACL, eacl.OperationGet)
+			record := denyOpToOthers(eacl.OperationGet)
+			records = append(records, record)
 		case "search":
-			denyOpToOthers(eACL, eacl.OperationSearch)
+			record := denyOpToOthers(eacl.OperationSearch)
+			records = append(records, record)
 		case "range":
-			denyOpToOthers(eACL, eacl.OperationRange)
+			record := denyOpToOthers(eacl.OperationRange)
+			records = append(records, record)
 		case "range_hash":
-			denyOpToOthers(eACL, eacl.OperationRangeHash)
+			record := denyOpToOthers(eacl.OperationRangeHash)
+			records = append(records, record)
 		}
 	}
 	for _, v := range allowPermissions {
 		switch v {
 		case "put":
-			allowOpToOthers(eACL, eacl.OperationPut)
+			record := allowOpToOthers(eacl.OperationPut)
+			records = append(records, record)
 		case "delete":
-			allowOpToOthers(eACL, eacl.OperationDelete)
+			record := allowOpToOthers(eacl.OperationDelete)
+			records = append(records, record)
 		case "head":
-			allowOpToOthers(eACL, eacl.OperationHead)
+			record := allowOpToOthers(eacl.OperationHead)
+			records = append(records, record)
 		case "get":
-			allowOpToOthers(eACL, eacl.OperationGet)
+			record := allowOpToOthers(eacl.OperationGet)
+			records = append(records, record)
 		case "search":
-			allowOpToOthers(eACL, eacl.OperationSearch)
+			record := allowOpToOthers(eacl.OperationSearch)
+			records = append(records, record)
 		case "range":
-			allowOpToOthers(eACL, eacl.OperationRange)
+			record := allowOpToOthers(eacl.OperationRange)
+			records = append(records, record)
 		case "range_hash":
-			allowOpToOthers(eACL, eacl.OperationRangeHash)
+			record := allowOpToOthers(eacl.OperationRangeHash)
+			records = append(records, record)
 		}
 	}
-	return *eACL, nil
+	tab.SetRecords(records)
+	return tab, nil
 }
 func DefaultContainerRestrictionTable(cnrID string) (eacl.Table, error) {
 	var cnrId cid.ID
@@ -186,10 +202,14 @@ func DefaultContainerRestrictionTable(cnrID string) (eacl.Table, error) {
 		return eacl.Table{}, err
 	}
 	// set EACL denying WRITE access to OTHERS
-	eACL := eacl.CreateTable(cnrId)
-	denyOpToOthers(eACL, eacl.OperationPut)
-	denyOpToOthers(eACL, eacl.OperationDelete)
-	return *eACL, nil
+	var records []eacl.Record
+	operationPutRecord := denyOpToOthers(eacl.OperationPut)
+	records = append(records, operationPutRecord)
+
+	pperationDeleteRecord := denyOpToOthers(eacl.OperationDelete)
+	records = append(records, pperationDeleteRecord)
+
+	return eacl.NewTableForContainer(cnrId, records), nil
 }
 
 // make a neoFS native eacl table from the view table
@@ -199,14 +219,15 @@ func ConvertEACLTableToNeoEAcl(eaclTable EACLTable) (*eacl.Table, error) {
 	if err := cid.DecodeString(eaclTable.ContainerId); err != nil {
 		return nil, fmt.Errorf("invalid container ID: %w", err)
 	}
-	nativeTable := eacl.CreateTable(cid)
+	var records []eacl.Record
 	for _, rec := range eaclTable.Records {
-		r := eacl.CreateRecord(rec.Action, rec.Operation)
+		//r := eacl.CreateRecord(rec.Action, rec.Operation)
 		var targets []eacl.Target
 		for _, t := range rec.Targets { //handles the targets on the record automatically
-			newTarget := eacl.NewTarget()
-			newTarget.SetRole(t.Role)
-			var keys []*ecdsa.PublicKey
+			//newTarget := eacl.NewTarget()
+			//eacl.NewTargetByAccounts()
+			//newTarget.SetRole(t.Role)
+			var userIds []user.ID
 			for _, p := range t.PublicKeys {
 				bPubKey, _ := hex.DecodeString(p)
 				var pubKey neofsecdsa.PublicKey
@@ -215,22 +236,29 @@ func ConvertEACLTableToNeoEAcl(eaclTable EACLTable) (*eacl.Table, error) {
 					return nil, err
 				}
 				publicKey := ecdsa.PublicKey(pubKey)
-				keys = append(keys, &publicKey)
+				userID := user.NewFromECDSAPublicKey(publicKey)
+				userIds = append(userIds, userID)
+				//eacl.SetTargetECDSAKeys(newTarget, keys...)
+
 			}
-			eacl.SetTargetECDSAKeys(newTarget, keys...)
-			targets = append(targets, *newTarget)
+			target := eacl.NewTargetByRole(t.Role)
+			target.SetAccounts(userIds)
+
+			//targets = append(targets, *newTarget)
+			targets = append(targets, target)
+
 		}
-		r.SetTargets(targets...)
-		nativeTable.AddRecord(r)
+		//r.SetTargets(targets...)
+		record := eacl.ConstructRecord(rec.Action, rec.Operation, targets)
+		records = append(records, record)
 	}
+
+	nativeTable := eacl.NewTableForContainer(cid, records)
 	fmt.Printf("native table is %+v\r\n", nativeTable)
-	return nativeTable, nil
+	return &nativeTable, nil
 }
 func ConvertNativeToEACLTable(nativeTable eacl.Table) (EACLTable, error) {
-	containerID, isSet := nativeTable.CID()
-	if !isSet {
-		return EACLTable{}, errors.New("no container ID")
-	}
+	containerID := nativeTable.GetCID()
 	eaclTable := EACLTable{
 		ContainerId: containerID.String(),
 	}
@@ -244,8 +272,10 @@ func ConvertNativeToEACLTable(nativeTable eacl.Table) (EACLTable, error) {
 			target := Target{
 				Role: t.Role(),
 			}
-			for _, key := range t.BinaryKeys() {
-				target.PublicKeys = append(target.PublicKeys, hex.EncodeToString(key))
+			for _, userID := range t.Accounts() {
+				// Convert user ID (which is [25]byte) to slice for hex encoding
+				binaryUserID := userID[:]
+				target.PublicKeys = append(target.PublicKeys, hex.EncodeToString(binaryUserID))
 			}
 			record.Targets = append(record.Targets, target)
 		}
@@ -366,7 +396,7 @@ func (o *ContainerCaller) Create(wg *waitgroup.WG, ctx context.Context, p Contai
 	}
 	putter := client.PrmContainerPut{}
 	putter.WithinSession(*sessionToken)
-	userID := user.ResolveFromECDSAPublicKey(p.PublicKey)
+	userID := user.NewFromECDSAPublicKey(p.PublicKey)
 	fmt.Println("issue check:", session.IssuedBy(*sessionToken, userID))
 	var cnr container.Container
 	cnr.Init()
@@ -540,14 +570,16 @@ func (o *ContainerCaller) SynchronousContainerHead(ctx context.Context, cnrId ci
 		DomainZone: remoteContainer.ReadDomain().Zone(),
 		CreatedAt:  remoteContainer.CreatedAt().Unix(),
 	}
-	remoteContainer.IterateAttributes(func(k string, v string) {
+
+	for k, v := range remoteContainer.Attributes() {
 		localContainer.Attributes[k] = v
-	})
+	}
 	containerEACL, err := sdkCli.ContainerEACL(ctx, cnrId, client.PrmContainerEACL{})
 	if err == nil {
 
 	} else {
-		containerEACL = *eacl.CreateTable(cnrId)
+		//containerEACL = *eacl.CreateTable(cnrId)
+		containerEACL = eacl.NewTableForContainer(cnrId, []eacl.Record{})
 	}
 	table, err := ConvertNativeToEACLTable(containerEACL)
 	if err != nil {
@@ -597,7 +629,7 @@ func (o *ContainerCaller) List(wg *waitgroup.WG, ctx context.Context, p Containe
 	var issuer user.ID
 	err := issuer.DecodeString(p.ContainerSubject)
 	if err != nil {
-		issuer = user.ResolveFromECDSAPublicKey(p.PublicKey)
+		issuer = user.NewFromECDSAPublicKey(p.PublicKey)
 	}
 	fmt.Println("user listing containers", issuer)
 	lst := client.PrmContainerList{}

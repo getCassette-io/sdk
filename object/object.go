@@ -5,6 +5,11 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
+	"io"
+	"log"
+	"strconv"
+	"time"
+
 	"github.com/getCassette-io/sdk/database"
 	"github.com/getCassette-io/sdk/emitter"
 	"github.com/getCassette-io/sdk/notification"
@@ -24,10 +29,6 @@ import (
 	"github.com/nspcc-dev/neofs-sdk-go/pool"
 	"github.com/nspcc-dev/neofs-sdk-go/user"
 	"go.uber.org/zap"
-	"io"
-	"log"
-	"strconv"
-	"time"
 )
 
 type ObjectAction interface {
@@ -144,10 +145,7 @@ func (o *ObjectCaller) SynchronousObjectHead(ctx context.Context, cnrId cid.ID, 
 		fmt.Printf("read object header via connection pool: %s", err)
 		return Object{}, err
 	}
-	id, ok := hdr.ID()
-	if !ok {
-		return Object{}, err
-	}
+	id := hdr.GetID()
 	localObject := Object{
 		ParentID:   cnrId.String(),
 		Id:         id.String(),
@@ -230,10 +228,7 @@ func (o *ObjectCaller) Head(wg *waitgroup.WG, ctx context.Context, p payload.Par
 		fmt.Printf("read object header via connection pool: %s", err)
 		return err
 	}
-	id, ok := hdr.ID()
-	if !ok {
-		return errors.New(utils.ErrorNoID)
-	}
+	id := hdr.GetID()
 	localObject := Object{
 		ParentID:   cnrID.String(),
 		Id:         id.String(),
@@ -587,7 +582,7 @@ func InitWriter(ctx context.Context, p *ObjectParameter, token tokens.Token) (io
 	if err != nil {
 		return nil, err
 	}
-	userID := user.ResolveFromECDSAPublicKey(ecdsa.PublicKey(*gA.PublicKey())) // this may effect who is registered as the owner of the payload on neo FS - unless we are explicitly set the owner
+	userID := user.NewFromECDSAPublicKey(ecdsa.PublicKey(*gA.PublicKey())) // this may effect who is registered as the owner of the payload on neo FS - unless we are explicitly set the owner
 	var gateSigner user.Signer = user.NewAutoIDSignerRFC6979(gA.PrivateKey().PrivateKey)
 	ni, err := sdkCli.NetworkInfo(ctx, client.PrmNetworkInfo{})
 	if err != nil {
@@ -615,7 +610,7 @@ func InitWriter(ctx context.Context, p *ObjectParameter, token tokens.Token) (io
 	var hdr object.Object
 	hdr.SetContainerID(cnrID)
 	hdr.SetType(object.TypeRegular)
-	hdr.SetOwnerID(&userID)
+	hdr.SetOwner(userID)
 	hdr.SetCreationEpoch(ni.CurrentEpoch())
 	fmt.Println("configuring header for new object ", p.Attrs)
 

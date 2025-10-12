@@ -40,7 +40,7 @@ func TestSessionSignature(t *testing.T) {
 
 	require.False(t, sessionToken.VerifySignature())
 	s := neofscrypto.NewStaticSigner(neofscrypto.ECDSA_WALLETCONNECT, append(bSig, bSalt...), &pubKey)
-	err = sessionToken.Sign(user.NewSigner(s, user.ResolveFromECDSAPublicKey(ecdsa.PublicKey(pubKey))))
+	err = sessionToken.Sign(user.NewSigner(s, user.NewFromECDSAPublicKey(ecdsa.PublicKey(pubKey))))
 	require.NoError(t, err)
 
 	require.True(t, sessionToken.VerifySignature())

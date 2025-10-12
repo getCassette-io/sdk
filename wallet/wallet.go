@@ -257,7 +257,7 @@ func WaitForTransaction(ctx context.Context, wsC *client.WSClient, txHash string
 
 	newWaiter := waiter.New(wsC, version)
 	// Use Waiter to wait for the transaction
-	aer, err := newWaiter.Wait(txId, blockCount+100, nil)
+	aer, err := newWaiter.Wait(context.Background(), txId, blockCount+100, nil)
 	if err != nil {
 		fmt.Println("waiter error ", err)
 		return err
@@ -358,7 +358,7 @@ func SubmitWCTransaction(dw *wallet.Account, websocket string, transactionData, 
 		fmt.Println("get version error ", err)
 		return "", err
 	}
-	aer, err := waiter.New(wsC, version).Wait(txId, signingTransaction.ValidUntilBlock, nil)
+	aer, err := waiter.New(wsC, version).Wait(context.Background(), txId, signingTransaction.ValidUntilBlock, nil)
 	if err != nil {
 		fmt.Println("waiter error ", err)
 		return "", err
@@ -493,7 +493,7 @@ func TransferTokenWithPrivateKey(acc *wallet.Account, websocket string, recipien
 		return util.Uint256{}, 0, err
 	}
 	tx, validUntilBlock, err := gasAct.Transfer(act.Sender(), recipientHash, gasPrecisionAmount, nil)
-	stateResponse, err := waiter.New(wsC, version).Wait(tx, validUntilBlock, err)
+	stateResponse, err := waiter.New(wsC, version).Wait(context.Background(), tx, validUntilBlock, err)
 	if err != nil {
 		fmt.Println("waiter error ", err)
 		return util.Uint256{}, 0, err

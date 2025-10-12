@@ -6,6 +6,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
+	"math/big"
+	"strconv"
+	"sync"
+	"time"
+
 	"github.com/getCassette-io/sdk/container"
 	"github.com/getCassette-io/sdk/database"
 	"github.com/getCassette-io/sdk/emitter"
@@ -30,11 +36,6 @@ import (
 	"github.com/nspcc-dev/neofs-sdk-go/pool"
 	"github.com/nspcc-dev/neofs-sdk-go/session"
 	"github.com/nspcc-dev/neofs-sdk-go/user"
-	"log"
-	"math/big"
-	"strconv"
-	"sync"
-	"time"
 )
 
 // type ObjectActionType func(p payload.Parameters, signedPayload payload.Payload, token Token) (notification.NewNotification, error)
@@ -339,7 +340,7 @@ func (c *Controller) Balances() ([]wallet.Nep17Token, error) {
 		return nil, err
 	}
 	blGet := client.PrmBalanceGet{}
-	blGet.SetAccount(user.ResolveFromECDSAPublicKey(ecdsa.PublicKey(pubKey))) //id of the current connected account
+	blGet.SetAccount(user.NewFromECDSAPublicKey(ecdsa.PublicKey(pubKey))) //id of the current connected account
 
 	neofsGasBalance, err := c.Pl.BalanceGet(context.Background(), blGet)
 	if err != nil {
