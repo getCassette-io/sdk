@@ -36,6 +36,13 @@ func (m UIProgressEvent) Emit(c context.Context, message emitter.EventMessage, p
 	return nil
 }
 
+type MockProgressEvent struct{}
+
+func (e MockProgressEvent) Emit(c context.Context, message emitter.EventMessage, payload any) error {
+	fmt.Printf("mock-emit - %s - %+v\r\n", message, payload)
+	return nil
+}
+
 type ProgressDetail string
 
 const (
@@ -87,7 +94,7 @@ func (p *ProgressHandlerManager) AddProgressHandler(wg *waitgroup.WG, ctx contex
 
 	p.ProgressHandlers[name] = progressHandler
 
-	wgMessage := "Add_progress_handler" + utils.GetCurrentFunctionName()
+	wgMessage := "Add_progress_handler" + utils.GetCurrentFunctionName() + name
 	// Start listening to updates from this progress bar
 	logger.Println("1. Add Progress Writer routine started")
 	wg.Add(1, wgMessage)
@@ -106,7 +113,7 @@ func (p *ProgressHandlerManager) AddProgressHandler(wg *waitgroup.WG, ctx contex
 				//delete(p.ProgressHandlers, name)
 				return
 			case update, ok := <-progressHandler.statusCh:
-				fmt.Println("received ")
+				logger.Println("received ")
 				if !ok {
 					logger.Println("1. statusCh closed, stopping Add Progress Writer routine")
 					//delete(p.ProgressHandlers, name)
@@ -184,7 +191,7 @@ func (w DataProgressHandler) Start(wg *waitgroup.WG, ctx context.Context, payloa
 	}
 	w.logger.Println("2. Progress bar started ", w.name)
 	progressChan := progress.NewTicker(ctx, w.Writer, payloadSize, w.duration)
-	wgMessage := "start_handler_" + utils.GetCurrentFunctionName()
+	wgMessage := "start_handler_" + utils.GetCurrentFunctionName() + w.name
 	wg.Add(1, wgMessage)
 	go func() {
 		defer func() {
@@ -197,7 +204,7 @@ func (w DataProgressHandler) Start(wg *waitgroup.WG, ctx context.Context, payloa
 				wg.Done(wgMessage)
 				//fixme - never reached on cancellation
 				//i think due to the fact the parent is called?
-				fmt.Println("2. ending progress bar ", w.name)
+				w.logger.Println("2. ending progress bar ", w.name)
 
 				//errMsg, ok := ctx.Value("error").(string)
 				//status := status
@@ -213,12 +220,12 @@ func (w DataProgressHandler) Start(wg *waitgroup.WG, ctx context.Context, payloa
 			case p := <-progressChan:
 				//send to a progress notifier that has been supplied
 				if p.N() == 0 {
-					fmt.Println("no data ")
+					w.logger.Println("no data ")
 					continue
 				}
-				fmt.Println("percent ", p.Percent())
+				w.logger.Println("percent ", p.Percent())
 				if p.Complete() {
-					fmt.Println("COMPLETED")
+					w.logger.Println("COMPLETED")
 					status := status
 					status.Title = w.name + " completed"
 					status.Show = false
@@ -232,8 +239,14 @@ func (w DataProgressHandler) Start(wg *waitgroup.WG, ctx context.Context, payloa
 				status.ExpectedSize = p.Size()
 				status.Remaining = p.Remaining().Round(250 * time.Millisecond)
 				status.Show = true
-				fmt.Printf("status %+v\r\n", status)
-				w.statusCh <- status
+				w.logger.Printf("status %+v\r\n", status)
+				select {
+				case w.statusCh <- status:
+				case <-ctx.Done():
+					return
+				default:
+					w.logger.Println("statusCh blocked or closed, skipping send")
+				}
 			}
 		}
 		//////fixme: this can never end because the ctx cannot be cancelled

@@ -277,14 +277,18 @@ var exampleNeoFSStatusData = `{
     "neo_go_rpc_nodes": {
         "mainnet": [
             [
-                "https://rpc10.n3.nspcc.ru:10331",
-                "wss://rpc10.n3.nspcc.ru:10331/ws"
+                {
+                    "HTTP": "https://rpc10.n3.nspcc.ru:10331",
+                    "WS": "wss://rpc10.n3.nspcc.ru:10331/ws"
+                }
             ]
         ],
         "testnet": [
             [
-                "https://rpc.t5.n3.nspcc.ru:20331",
-                "wss://rpc.t5.n3.nspcc.ru:20331/ws"
+                {
+                    "HTTP": "https://rpc.t5.n3.nspcc.ru:20331",
+                    "WS": "wss://rpc.t5.n3.nspcc.ru:20331/ws"
+                }
             ]
         ]
     }

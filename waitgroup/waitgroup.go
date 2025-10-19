@@ -1,7 +1,6 @@
 package waitgroup
 
 import (
-	"golang.org/x/exp/maps"
 	"log"
 	"sync"
 	"time"
@@ -39,7 +38,7 @@ func (w *WG) Done(msg string) {
 	defer w.mu.Unlock()
 
 	if _, exists := w.groups[msg]; !exists {
-		w.logger.Printf("[%s] Attempt to mark non-existent group as done: %s\n", time.Now().Format(time.RFC3339), msg, maps.Keys(w.groups))
+		w.logger.Printf("[%s] Attempt to mark non-existent group as done: %s\n", time.Now().Format(time.RFC3339), msg)
 		return
 	}
 

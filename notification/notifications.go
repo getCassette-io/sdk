@@ -143,7 +143,6 @@ func (m NotificationManager) QueueNotification(notification NewNotification) {
 
 func (m NotificationManager) ListenAndEmit() {
 	fmt.Println("ListenAndEmit routine started")
-	m.wg.Add(1)
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
 		defer func() {
@@ -159,6 +158,9 @@ func (m NotificationManager) ListenAndEmit() {
 			case not, ok := <-m.notificationCh:
 				if !ok {
 					fmt.Println("Notification channel closed, exiting ListenAndEmit")
+					return
+				}
+				if m.Emitter == nil {
 					return
 				}
 				if err := m.Emit(m.ctx, emitter.NotificationAddMessage, not); err != nil {

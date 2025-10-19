@@ -428,7 +428,7 @@ func (o *ContainerCaller) Create(wg *waitgroup.WG, ctx context.Context, p Contai
 	createdAt := time.Now().Unix()
 	cnr.SetName(p.Description) //name
 	if err := client.SyncContainerWithNetwork(p.Ctx, &cnr, p.Pl); err != nil {
-		fmt.Println("sync container with the network state: %s", err)
+		fmt.Printf("sync container with the network state: %s", err)
 		actionChan <- o.Notification(
 			"Could not create container",
 			"Error syncing with network "+err.Error(),

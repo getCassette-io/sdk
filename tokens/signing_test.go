@@ -1,13 +1,11 @@
 package tokens
 
 import (
-	"crypto/ecdsa"
 	"encoding/base64"
 	"encoding/hex"
 	neofscrypto "github.com/nspcc-dev/neofs-sdk-go/crypto"
 	neofsecdsa "github.com/nspcc-dev/neofs-sdk-go/crypto/ecdsa"
 	"github.com/nspcc-dev/neofs-sdk-go/session"
-	"github.com/nspcc-dev/neofs-sdk-go/user"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
@@ -39,9 +37,8 @@ func TestSessionSignature(t *testing.T) {
 	require.NoError(t, sessionToken.Unmarshal(bToken))
 
 	require.False(t, sessionToken.VerifySignature())
-	s := neofscrypto.NewStaticSigner(neofscrypto.ECDSA_WALLETCONNECT, append(bSig, bSalt...), &pubKey)
-	err = sessionToken.Sign(user.NewSigner(s, user.NewFromECDSAPublicKey(ecdsa.PublicKey(pubKey))))
-	require.NoError(t, err)
+	s := neofscrypto.NewSignature(neofscrypto.ECDSA_WALLETCONNECT, &pubKey, append(bSig, bSalt...))
+	sessionToken.AttachSignature(s)
 
 	require.True(t, sessionToken.VerifySignature())
 }
