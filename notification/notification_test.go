@@ -7,11 +7,15 @@ import (
 )
 
 func TestNotification(t *testing.T) {
+	context, cancel := context.WithCancel(context.Background())
+	wg := sync.WaitGroup{}
+
 	m := NotificationManager{
 		notificationCh: make(chan NewNotification),
-		ctx:            context.Background(),
+		ctx:            context,
+		wg:             &wg,
+		cancelFunc:     cancel,
 	}
-	wg := sync.WaitGroup{}
 	wg.Add(1)
 	go m.ListenAndEmit()
 	m.QueueNotification(NewNotification{
@@ -20,5 +24,6 @@ func TestNotification(t *testing.T) {
 		Action:      ActionNotification,
 		Description: "Successful Notification",
 	})
+	m.cancelFunc()
 	wg.Wait()
 }

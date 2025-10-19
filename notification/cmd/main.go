@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/getCassette-io/sdk/notification"
 	"log"
 	"sync"
 	"time"
+
+	"github.com/getCassette-io/sdk/notification"
+	"github.com/getCassette-io/sdk/waitgroup"
 )
 
 func main() {
@@ -26,11 +28,14 @@ func main() {
 	wg := sync.WaitGroup{}
 	wg.Add(2)
 
+	logger := log.Default()
+
 	// Create and start the writerProgressBar
-	wp := notification.NewDataProgressHandler(ctx, statusCh, writer, "data transfer", 50*time.Millisecond)
+	wp := notification.NewDataProgressHandler(ctx, statusCh, writer, "data transfer", 50*time.Millisecond, logger)
 	go func() {
 		defer wg.Done()
-		wp.Start(int64(len(data)), &wg)
+		waitgroup := waitgroup.NewWaitGroup(logger)
+		wp.Start(waitgroup, ctx, int64(len(data)))
 	}()
 
 	//Goroutine for reading progress updates

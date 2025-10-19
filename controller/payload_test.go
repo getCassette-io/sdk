@@ -6,26 +6,28 @@ import (
 	"crypto/ecdsa"
 	"encoding/hex"
 	"fmt"
+	"log"
+	"math/rand"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
 	"github.com/getCassette-io/sdk/database"
 	"github.com/getCassette-io/sdk/emitter"
 	"github.com/getCassette-io/sdk/notification"
 	obj "github.com/getCassette-io/sdk/object"
 	"github.com/getCassette-io/sdk/payload"
-	gspool "github.com/getCassette-io/sdk/pool"
 	"github.com/getCassette-io/sdk/readwriter"
 	"github.com/getCassette-io/sdk/tokens"
 	"github.com/getCassette-io/sdk/utils"
+	"github.com/getCassette-io/sdk/waitgroup"
+	"github.com/nspcc-dev/neo-go/pkg/crypto/keys"
 	wal "github.com/nspcc-dev/neo-go/pkg/wallet"
+	cid "github.com/nspcc-dev/neofs-sdk-go/container/id"
 	neofsecdsa "github.com/nspcc-dev/neofs-sdk-go/crypto/ecdsa"
 	"github.com/nspcc-dev/neofs-sdk-go/eacl"
 	"github.com/nspcc-dev/neofs-sdk-go/object"
-	"log"
-	"math/rand"
-	"os"
-	"path/filepath"
-	"sync"
-	"testing"
-	"time"
 )
 
 var minimalJPEG = []byte{
@@ -78,8 +80,9 @@ func (o *MockActionType) List() (notification.NewNotification, error) {
 }
 
 func TestRawWalletSigning(t *testing.T) {
-	wg := &sync.WaitGroup{}
-	ctx, cancelFunc := context.WithCancel(context.Background())
+	logger := utils.NewTestLogger(t)
+	wg := waitgroup.NewWaitGroup(logger)
+	ctx, cancelFunc := context.WithTimeout(context.Background(), 5*time.Second)
 	walletId := "address"
 	//publicKey := "publicKey"
 	walletLocation := "walletLocation"
@@ -92,12 +95,20 @@ func TestRawWalletSigning(t *testing.T) {
 	//create an emitter for notifications
 	notifyEmitter := notification.MockNotificationEvent{Name: "notification events:", DB: db}
 	//create a notification manager
-	n := notification.NewNotificationManager(wg, notifyEmitter, ctx, cancelFunc)
+
+	idGenerator := func() string {
+		return "mock-notifier-94d9a4c7-9999-4055-a549-f51383edfe57"
+	}
+
+	n := notification.NewNotificationManager(wg.WaitGroup(), notifyEmitter, ctx, idGenerator)
 	ephemeralAccount, err := wal.NewAccount()
 	if err != nil {
 		t.Fatal("could not create account ", err)
 	}
-	controller, err := NewMockController()
+
+	wgMessage := "new_mock_controller" + utils.GetCurrentFunctionName()
+	wg.Add(1, wgMessage)
+	controller, err := NewMockController(wg.WaitGroup(), ctx, notifyEmitter, database.TESTNET, n, db, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +132,7 @@ func TestRawWalletSigning(t *testing.T) {
 	controller.wallet.Address()
 
 	//todo - must make sure this is set
-	controller.tokenManager = &tokens.PrivateKeyTokenManager{W: *ephemeralAccount}
+	controller.TokenManager = &tokens.PrivateKeyTokenManager{W: ephemeralAccount}
 
 	//todo - should the db/notifier be on the object or on the object parameters
 	mockAction := obj.MockObject{Id: "object", ContainerId: "container"}
@@ -165,10 +176,10 @@ func TestRawWalletSigning(t *testing.T) {
 		after that we need to make this process happen in the object type. The object will need to know how to write to a database interface
 	*/
 	progressBarEmitter := notification.MockProgressEvent{}
-	controller.progressBarManager = notification.NewProgressHandlerManager(notification.DataProgressHandlerFactory, progressBarEmitter)
+	controller.ProgressHandlerManager = notification.NewProgressHandlerManager(notification.DataProgressHandlerFactory, progressBarEmitter)
 	pBarName := "file_monitor" //todo - expose the name of a progress bar
-	fileWriterProgressBar := controller.progressBarManager.AddProgressWriter(destination, pBarName)
-	controller.progressBarManager.StartProgressBar(wg, pBarName, fileStats.Size())
+	fileWriterProgressBar := controller.ProgressHandlerManager.AddProgressHandler(wg, ctx, destination, pBarName, logger)
+	controller.ProgressHandlerManager.StartProgressHandler(wg, ctx, pBarName, fileStats.Size())
 
 	//wg.Add(1)
 	//go func() {
@@ -178,7 +189,8 @@ func TestRawWalletSigning(t *testing.T) {
 	//	}
 	//}()
 
-	wg.Add(1)
+	listenAndEmitMessage := "listen_and_emit_message_" + utils.GetCurrentFunctionName()
+	wg.Add(1, listenAndEmitMessage)
 	go controller.Notifier.ListenAndEmit() //this sends out notifications to the frontend.
 	// Request to perform a read action
 	//p := payload.NewPayload([]byte("example data"))
@@ -207,19 +219,20 @@ func TestRawWalletSigning(t *testing.T) {
 		Writer: fileWriterProgressBar, //this is where we write the data to
 	}
 	o.ExpiryEpoch = 100 //fix me = remove this.
-	wg.Add(1)           //fixme: - total hack for the tests to end and database to be loaded.
+	performObjectActionMessage := "start_perform_object_action_" + utils.GetCurrentFunctionName()
+	wg.Add(1, performObjectActionMessage) //fixme: - total hack for the tests to end and database to be loaded.
 	go func() {
-		defer wg.Done()
+		defer wg.Done(performObjectActionMessage)
 		time.Sleep(3 * time.Second)
 		cancelFunc() //kill everything
 	}()
 	//waits for actions to complete entirely
-	if err := controller.PerformObjectAction(wg, &o, mockAction.Head); err != nil {
+	if err := controller.PerformObjectAction(wg, ctx, cancelFunc, &o, mockAction.Head); err != nil {
 		t.Fatal(err)
 	}
 	wg.Wait()
 
-	read, err := controller.DB.Select(database.NotificationBucket, n.GenerateIdentifier())
+	read, err := controller.DB.Select(database.NotificationBucket, n.IDGenerator())
 	if err != nil {
 		fmt.Println("database error ", err)
 		return
@@ -232,8 +245,6 @@ func TestRawWalletSigning(t *testing.T) {
 
 		}
 	}(file)
-
-	return
 }
 
 func MockFileCopy() (*os.File, os.FileInfo) {
@@ -267,16 +278,38 @@ func MockFileCopy() (*os.File, os.FileInfo) {
 }
 
 func TestMockWalletConnect(t *testing.T) {
-	c, err := NewMockController()
+	logger := utils.NewTestLogger(t)
+
+	wg := waitgroup.NewWaitGroup(logger)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	walletId := "address"
+	//publicKey := "publicKey"
+	walletLocation := "walletLocation"
+	db := database.NewMockDB(string(utils.TestNet), walletId, walletLocation)
+	err := db.CreateWalletBucket()
+	if err != nil {
+		log.Fatal("error creating bucket wallet ", err)
+	}
+
+	//create an emitter for notifications
+	notifyEmitter := notification.MockNotificationEvent{Name: "notification events:", DB: db}
+	//create a notification manager
+	idGenerator := func() string {
+		return "mock-notifier-94d9a4c7-9999-4055-a549-f51383edfe57"
+	}
+	wgMessage := "new_notification_manager" + utils.GetCurrentFunctionName()
+	wg.Add(1, wgMessage)
+	n := notification.NewNotificationManager(wg.WaitGroup(), notifyEmitter, ctx, idGenerator)
+	if err != nil {
+		t.Fatal("could not create account ", err)
+	}
+
+	c, err := NewMockController(wg.WaitGroup(), ctx, notifyEmitter, database.TESTNET, n, db, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
-	gateKey := c.tokenManager.GateKey()
-	pl, err := gspool.GetPool(c.ctx, gateKey.PrivateKey().PrivateKey, utils.RetrieveStoragePeers(utils.MainNet))
-	if err != nil {
-		fmt.Println("error getting pool ", err)
-		t.Fatal(err)
-	}
+	gateKey := c.TokenManager.GateKey()
+	fmt.Print("pool dialed ok from the test\n")
 
 	mockAction := obj.MockObject{Id: "object", ContainerId: "container"}
 	//mockAction := obj.Object{}
@@ -291,22 +324,24 @@ func TestMockWalletConnect(t *testing.T) {
 	c.wallet = &acc
 	mockSigner := emitter.MockWalletConnectEmitter{Name: "[mock signer]"}
 	mockSigner.SignResponse = c.UpdateFromWalletConnect
-	c.SetEmitter(mockSigner)
+	c.SetSigningEmitter(mockSigner)
 	//c.RegisterAccount(acc, nil)
 	acc.emitter = c.Signer
 	//prep for some reading
 	pBarName := "file_monitor"       //todo - expose the name of a progress bar
 	destination := new(bytes.Buffer) //todo: this is where we want to put it
 	file, fileStats := MockFileCopy()
-	fileWriterProgressBar := c.progressBarManager.AddProgressWriter(destination, pBarName)
-	c.progressBarManager.StartProgressBar(c.wg, pBarName, fileStats.Size())
+	fileWriterProgressBar := c.ProgressHandlerManager.AddProgressHandler(wg, ctx, destination, pBarName, logger)
+	c.ProgressHandlerManager.StartProgressHandler(wg, ctx, pBarName, fileStats.Size())
 
 	//now we are ready to set up all the listeners
-	c.Add(1)
+	wgMessage = "listen_and_emit" + utils.GetCurrentFunctionName()
+
+	wg.Add(1, wgMessage)
 	go c.Notifier.ListenAndEmit() //this sends out notifications to the frontend.
 
 	var o obj.ObjectParameter
-	o.Pl = pl
+	o.Pl = c.Pl
 	o.GateAccount = &gateKey
 	o.Id = "A6iuMASnCLGPVGgESWCiDfAWZZ8RiWQR5934JrJBDBoK"
 	o.ContainerId = "87JeshQhXKBw36nULzpLpyn34Mhv1kGCccYyHU2BqGpT"
@@ -332,25 +367,29 @@ func TestMockWalletConnect(t *testing.T) {
 		Writer: fileWriterProgressBar, //this is where we write the data to
 	}
 	o.ExpiryEpoch = 100 //fix me = remove this.
-	c.Add(1)            //fixme: - total hack for the tests to end and database to be loaded.
+	wgMessage = "perform_object_action" + utils.GetCurrentFunctionName()
+
+	wg.Add(1, wgMessage) //fixme: - total hack for the tests to end and database to be loaded.
 	go func() {
-		defer c.Done()
+		defer wg.Done(wgMessage)
 		time.Sleep(3 * time.Second)
-		c.cancelCtx() //kill everything
+		cancel() //kill everything
 	}()
 	//waits for actions to complete entirely
-	if err := c.PerformObjectAction(c.wg, &o, mockAction.Head); err != nil {
+	if err := c.PerformObjectAction(wg, c.ctx, c.cancelCtx, &o, mockAction.Head); err != nil {
 		t.Fatal(err)
 	}
 	//c.Wait()
 }
 func TestWalletConnectSigning(t *testing.T) {
-	wg := &sync.WaitGroup{}
-	ctx, cancelFunc := context.WithCancel(context.Background())
+	logger := utils.NewTestLogger(t)
+
+	wg := waitgroup.NewWaitGroup(logger)
+	ctx, cancelFunc := context.WithTimeout(context.Background(), 5*time.Second)
 	walletId := "address"
 	//publicKey := "publicKey"
 	walletLocation := "walletLocation"
-	db := database.NewMockDB(string(utils.MainNet), walletId, walletLocation)
+	db := database.NewMockDB(string(utils.TestNet), walletId, walletLocation)
 	err := db.CreateWalletBucket()
 	if err != nil {
 		log.Fatal("error creating bucket wallet ", err)
@@ -359,12 +398,17 @@ func TestWalletConnectSigning(t *testing.T) {
 	//create an emitter for notifications
 	notifyEmitter := notification.MockNotificationEvent{Name: "notification events:", DB: db}
 	//create a notification manager
-	n := notification.NewNotificationManager(wg, notifyEmitter, ctx, cancelFunc)
+	idGenerator := func() string {
+		return "mock-notifier-94d9a4c7-9999-4055-a549-f51383edfe57"
+	}
+	n := notification.NewNotificationManager(wg.WaitGroup(), notifyEmitter, ctx, idGenerator)
 	ephemeralAccount, err := wal.NewAccount()
 	if err != nil {
 		t.Fatal("could not create account ", err)
 	}
-	controller, err := NewMockController()
+	wgMessage := "new_mock_controller" + utils.GetCurrentFunctionName()
+	wg.Add(1, wgMessage)
+	controller, err := NewMockController(wg.WaitGroup(), ctx, notifyEmitter, database.TESTNET, n, db, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,12 +429,7 @@ func TestWalletConnectSigning(t *testing.T) {
 
 	//todo - must make sure this is set
 
-	controller.tokenManager = &tokens.WalletConnectTokenManager{W: ephemeralAccount, Persisted: true} //persist for mock emitter.
-	pl, err := gspool.GetPool(ctx, ephemeralAccount.PrivateKey().PrivateKey, utils.RetrieveStoragePeers(utils.MainNet))
-	if err != nil {
-		fmt.Println("error getting pool ", err)
-		t.Fatal(err)
-	}
+	controller.TokenManager = &tokens.WalletConnectTokenManager{W: ephemeralAccount, Persisted: true} //persist for mock emitter.
 
 	//todo - should the db/notifier be on the object or on the object parameters
 	mockAction := obj.MockObject{Id: "object", ContainerId: "container"}
@@ -434,10 +473,10 @@ func TestWalletConnectSigning(t *testing.T) {
 		after that we need to make this process happen in the object type. The object will need to know how to write to a database interface
 	*/
 	progressBarEmitter := notification.MockProgressEvent{}
-	controller.progressBarManager = notification.NewProgressHandlerManager(notification.DataProgressHandlerFactory, progressBarEmitter)
+	controller.ProgressHandlerManager = notification.NewProgressHandlerManager(notification.DataProgressHandlerFactory, progressBarEmitter)
 	pBarName := "file_monitor" //todo - expose the name of a progress bar
-	fileWriterProgressBar := controller.progressBarManager.AddProgressWriter(destination, pBarName)
-	controller.progressBarManager.StartProgressBar(wg, pBarName, fileStats.Size())
+	fileWriterProgressBar := controller.ProgressHandlerManager.AddProgressHandler(wg, ctx, destination, pBarName, logger)
+	controller.ProgressHandlerManager.StartProgressHandler(wg, ctx, pBarName, fileStats.Size())
 
 	//wg.Add(1)
 	//go func() {
@@ -447,7 +486,9 @@ func TestWalletConnectSigning(t *testing.T) {
 	//	}
 	//}()
 
-	wg.Add(1)
+	wgMessage = "listen_and_emit" + utils.GetCurrentFunctionName()
+
+	wg.Add(1, wgMessage)
 	go controller.Notifier.ListenAndEmit() //this sends out notifications to the frontend.
 	// Request to perform a read action
 	//p := payload.NewPayload([]byte("example data"))
@@ -457,7 +498,7 @@ func TestWalletConnectSigning(t *testing.T) {
 		3. then we need to create the parameters for the action
 	*/
 	var o obj.ObjectParameter
-	o.Pl = pl
+	o.Pl = controller.Pl
 	o.GateAccount = ephemeralAccount
 	o.Id = "A6iuMASnCLGPVGgESWCiDfAWZZ8RiWQR5934JrJBDBoK"
 	o.ContainerId = "87JeshQhXKBw36nULzpLpyn34Mhv1kGCccYyHU2BqGpT"
@@ -483,19 +524,21 @@ func TestWalletConnectSigning(t *testing.T) {
 		Writer: fileWriterProgressBar, //this is where we write the data to
 	}
 	o.ExpiryEpoch = 100 //fix me = remove this.
-	wg.Add(1)           //fixme: - total hack for the tests to end and database to be loaded.
+	wgMessage = "perform_object_action" + utils.GetCurrentFunctionName()
+
+	wg.Add(1, wgMessage) //fixme: - total hack for the tests to end and database to be loaded.
 	go func() {
-		defer wg.Done()
+		defer wg.Done(wgMessage)
 		time.Sleep(3 * time.Second)
 		cancelFunc() //kill everything
 	}()
 	//waits for actions to complete entirely
-	if err := controller.PerformObjectAction(wg, &o, mockAction.Head); err != nil {
+	if err := controller.PerformObjectAction(wg, ctx, cancelFunc, &o, mockAction.Head); err != nil {
 		t.Fatal(err)
 	}
 	wg.Wait()
 
-	read, err := controller.DB.Select(database.NotificationBucket, n.GenerateIdentifier())
+	read, err := controller.DB.Select(database.NotificationBucket, n.IDGenerator())
 	if err != nil {
 		fmt.Println("database error ", err)
 		return
@@ -513,14 +556,18 @@ func TestWalletConnectSigning(t *testing.T) {
 	o.ActionOperation = eacl.OperationGet //set this to create a new token (remember will need signing)
 	//this could be done with a real or fake noeFS - but the issue is creating/mocking the readers etc
 	nodes := utils.RetrieveStoragePeers(utils.TestNet)
-	token, err := obj.ObjectBearerToken(o, nodes) //fix me - no longer required as performOperation will create the token for us
+
+	var cnrId cid.ID
+	err = cnrId.DecodeString(o.ParentID())
+
+	token, err := obj.ObjectBearerToken(cnrId, o, keys.PublicKey(pubKey), nodes) //fix me - no longer required as performOperation will create the token for us
 	if err != nil {
 		return
 	}
 	token.SignedData() //this needs signing. Use the emitter.
 
-	bt := tokens.BearerToken{BearerToken: &token}
-	controller.tokenManager.AddBearerToken(controller.wallet.Address(), o.ParentID(), bt)
+	bt := &tokens.BearerToken{BearerToken: &token}
+	controller.TokenManager.AddBearerToken(controller.wallet.Address(), o.ParentID(), bt)
 	//staticSigner := neofscrypto.NewStaticSigner(neofscrypto.ECDSA_WALLETCONNECT, append(bSig, salt...), &pubKey)
 	//err = sessionToken.Sign(user.NewSigner(staticSigner, issuer))
 	//if err != nil {
@@ -530,7 +577,7 @@ func TestWalletConnectSigning(t *testing.T) {
 	//ok to do a read or write...
 	//fixme - need to get the current epoch to know if the bearer token is still valid
 	//controller.tokenManager.FindBearerToken(controller.wallet.Address(), o.ParentID(), eacl.OperationGet)
-	destinationObject, objectReader, err := obj.InitReader(o, bt)
+	destinationObject, objectReader, err := obj.InitReader(ctx, o, bt)
 	if err != nil {
 		return
 	}
@@ -542,11 +589,11 @@ func TestWalletConnectSigning(t *testing.T) {
 	destinationObject.PayloadSize() //use this with the progress bar
 	//give the size from the dstObjct to the progress bar
 	//use the objectReader in the dualStream
-	oj := obj.Object{
-		Notifier: n,
-	}
+	oj := obj.MockObject{Id: "object", ContainerId: "container"}
+	oj.Notifier = n
+
 	//could still mock to here now, if we mae the InitReader an interface function.
-	if err := controller.PerformObjectAction(wg, &o, oj.Read); err != nil {
+	if err := controller.PerformObjectAction(wg, ctx, cancelFunc, &o, oj.Read); err != nil {
 		t.Fatal(err)
 	}
 	//should this be done elsewhere?
@@ -555,17 +602,17 @@ func TestWalletConnectSigning(t *testing.T) {
 	}
 	{ //hackery for the purpose of the test
 		o.ActionOperation = eacl.OperationPut //set this to create a new token (remember will need signing)
-		token, err := obj.ObjectBearerToken(o, nodes)
+		token, err := obj.ObjectBearerToken(cnrId, o, keys.PublicKey(pubKey), nodes)
 		if err != nil {
 			return
 		}
 		token.SignedData() //this needs signing. Use the emitter.
 		//sign the data!  -- we can use a wallet type where we have the private key to do this for tests.
-		bt = tokens.BearerToken{BearerToken: &token}
+		bt = &tokens.BearerToken{BearerToken: &token}
 	}
-	controller.tokenManager.AddBearerToken(controller.wallet.Address(), o.ParentID(), bt)
+	controller.TokenManager.AddBearerToken(controller.wallet.Address(), o.ParentID(), bt)
 
-	objectWriter, err := obj.InitWriter(o, bt)
+	objectWriter, err := obj.InitWriter(ctx, &o, bt)
 	if err != nil {
 		return
 	}
@@ -578,7 +625,7 @@ func TestWalletConnectSigning(t *testing.T) {
 		Writer: objectWriter, //this is where we write the data to
 	}
 	fileStats.Size() // use this with the progress bar to degine the upload size
-	if err := controller.PerformObjectAction(wg, &o, oj.Write); err != nil {
+	if err := controller.PerformObjectAction(wg, ctx, cancelFunc, &o, oj.Create); err != nil {
 		t.Fatal(err)
 	}
 	if err := objectWriter.Close(); err != nil {

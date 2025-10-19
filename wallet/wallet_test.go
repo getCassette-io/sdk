@@ -56,7 +56,7 @@ func TestTransfer(t *testing.T) {
 		fmt.Println("could not decrypt wallet with password ", err)
 		t.Fatal(err)
 	}
-	txId, validUntilBlock, err := wallet.TransferTokenWithPrivateKey(w.Accounts[0], wallet.RPC_WEBSOCKET, w.Accounts[0].Address, 0.01)
+	txId, validUntilBlock, err := wallet.TransferTokenWithPrivateKey(w.Accounts[0], string(wallet.RPC_MAIN_WEBSOCKET), w.Accounts[0].Address, 0.01)
 	if err != nil {
 		t.Fatal(err)
 	}
