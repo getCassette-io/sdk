@@ -14,7 +14,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jdxyw/generativeart v0.0.0-20220127024657-50049f153090
 	github.com/machinebox/progress v0.2.0
-	github.com/nspcc-dev/neo-go v0.113.0
+	github.com/nspcc-dev/neo-go v0.114.0
 	github.com/nspcc-dev/neofs-sdk-go v1.0.0-rc.15
 	github.com/spf13/viper v1.20.1
 	github.com/stretchr/testify v1.11.1
